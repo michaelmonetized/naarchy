@@ -1,0 +1,16 @@
+[Unit]
+Description=Naarchy notch island
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/naarchy run
+Restart=on-abnormal
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+
+# After: cargo install --path . --locked
+# copy this file to ~/.config/systemd/user/naarchy.service and set:
+# ExecStart=%h/.cargo/bin/naarchy run

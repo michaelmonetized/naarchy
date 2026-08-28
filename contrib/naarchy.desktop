@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Naarchy
+Comment=Notch island — file shelf, clipboard, media, HUDs
+Exec=naarchy run
+TryExec=naarchy
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+Keywords=notch;island;clipboard;shelf;hyprland;omarchy;

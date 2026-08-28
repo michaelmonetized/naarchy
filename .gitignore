@@ -1,0 +1,6 @@
+/target
+
+# Full-desktop captures leak the session. Product crops in docs/screenshots/ ship.
+docs/screenshots/00-fullscreen-*.png
+docs/screenshots/01-pill.png
+docs/screenshots/01-pill-collapsed.png
