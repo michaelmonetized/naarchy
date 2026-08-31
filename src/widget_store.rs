@@ -69,10 +69,17 @@ impl WidgetStore {
 
     pub fn load() -> Self {
         let p = Self::path();
-        match std::fs::read_to_string(&p) {
+        let mut store = match std::fs::read_to_string(&p) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
             Err(_) => Self::default(),
+        };
+        // 0.2.5: Clock is everywhere, user never wants it in naarchy — migrate existing installs
+        let before = store.widgets.len();
+        store.widgets.retain(|k| *k != WidgetKind::Clock);
+        if store.widgets.len() != before {
+            store.save();
         }
+        store
     }
 
     pub fn save(&self) {

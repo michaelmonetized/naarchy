@@ -323,12 +323,49 @@ window.naarchy box.na-drop-veil {{
   background-color: {glass_2};
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
 }}
+.na-media-art--small {{
+  border-radius: 8px;
+  background-color: #2a2a2c;
+  box-shadow: none;
+}}
+.na-media-card {{
+  border-radius: 16px;
+  padding: 10px 12px;
+  background-color: rgba(32,32,34,0.96);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}}
 .na-media-title {{
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.4px;
 }}
+.na-media-title--compact {{
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: #ffffff;
+}}
 .na-media-artist {{ font-size: 13px; color: {fg_dim}; }}
+.na-media-player {{
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: rgba(255,255,255,0.45);
+}}
+.na-media-btn {{
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 999px;
+  background-color: rgba(255,255,255,0.10);
+  color: #ffffff;
+}}
+.na-media-btn:hover {{ background-color: rgba(255,255,255,0.16); }}
+.na-media-play {{
+  background-color: #ffffff;
+  color: #1a1a1c;
+}}
 .na-btn {{
   border-radius: 999px;
   min-width: 36px;

@@ -13,6 +13,7 @@ pub mod timer;
 
 /// Nerd Font glyphs used as UI chrome (not content). One family, one size
 /// scale — never mix emoji into the chrome.
+#[allow(dead_code)]
 pub mod g {
     pub const HOME: &str = "\u{f015}";
     pub const INBOX: &str = "\u{f01c}";
@@ -35,6 +36,7 @@ pub mod g {
     pub const FILE: &str = "\u{f15b}";
     pub const TEXT: &str = "\u{f0f6}";
     pub const SETTINGS: &str = "\u{f013}";
+    pub const PLUS: &str = "\u{f067}";
 }
 
 use crate::clip_store::ClipStore;

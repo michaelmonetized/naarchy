@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 — no clock, compact media, pause fix
+
+- **Clock**: you said clocks are everywhere — `WidgetStore::default` is `Timer+Media` and `src/widget_store.rs:71` now migrates existing `~/.config/naarchy/widgets.json` removing `Clock` (your file had `Timer,Media,Clock,Battery` → now `Timer,Media,Battery`). Drawer still has Clock if you ever want it, but Home won’t show it.
+- **Media pause**: `src/ui/media.rs:108` `play_btn` now logs `player` and `media_cmd` is always `Some` after `mpris::run`; `src/services/mpris.rs:132` ranked `PlayPause` targets the playing player (chromium `Playing` `Royalty` now correctly pauses via `gdbus` `PlayPause` — tested `Paused`→`Playing`). Compact redesign matches your screenshot `src/ui/media.rs:27` — `na-media-card` `56px` art `na-media-art--small`, `na-media-title--compact` 13px, `+` `src/ui/mod.rs:37` `PLUS` `na-media-btn` adds current track to shelf, white `na-media-play` pause/next only (no seek/shuffle) for observability across any MPRIS app.
+- **Design**: `src/theme.rs:322` `na-media-card` `rgba(32,32,34,0.96)` 16px radius, `na-media-btn` 32px `rgba(255,255,255,0.10)` matches image dark card.
+
 ## 0.2.4 — calendar join + directions + leave
 
 - **Calendar Meet/Zoom/Teams**: if ICS `DESCRIPTION`/`LOCATION`/`URL`/`X-GOOGLE-CONFERENCE` contains `meet.google.com` / `zoom.us` / `teams.microsoft.com|teams.live.com`, the list item now shows a `Join Meet/Zoom/Teams` button (`src/services/calendar.rs:360` `extract_join_url` scans all props for `https://` URLs, `classify_join_url`) opening via `xdg-open` (`src/ui/calendar.rs:250`).
