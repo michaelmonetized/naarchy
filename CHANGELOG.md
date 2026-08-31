@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 — calendar ICS fix (no events)
+
+- Fix `DTSTART;TZID=...` and `DTSTART;VALUE=DATE` never parsed — `ics_props` stored full `DTSTART;TZID=...` key so `props.get("DTSTART")` missed, and `parse_dtstart` expected `DTSTART:...:` prefix (`src/services/calendar.rs:260`/`292`). Now key is stripped to `DTSTART` and value is correctly `20260831T100000`. Your private `https://calendar.google.com/calendar/ical/.../basic.ics` feed at `~/.config/naarchy/config.toml:37` now shows `Monday Sales Huddle Meeting` at 10:00 today (was 0 events).
+
 ## 0.2.2 — calendar docs, media observer, clipboard facelift
 
 - **Calendar**: explain where to add ICS in `~/.config/naarchy/config.toml:36` at bottom `[calendar]` `feeds = ["https://.../basic.ics"]` with Google (Settings → Integrate calendar → Secret address in iCal format) and iCloud (Share Calendar → Public Calendar) examples (`docs/CONFIG.md:62`); auto-migrate old configs missing `[calendar]` (`src/config.rs:220`).

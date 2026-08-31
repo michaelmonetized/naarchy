@@ -270,7 +270,9 @@ fn ics_props(block: &str) -> std::collections::HashMap<String, String> {
         }
         if let Some(p) = pending.take() {
             if let Some(idx) = p.find(':') {
-                let key = p[..idx].to_uppercase();
+                let raw_key = &p[..idx];
+                // strip parameters like ;TZID=... or ;VALUE=DATE so DTSTART;TZID=... → DTSTART
+                let key = raw_key.split(';').next().unwrap().to_uppercase();
                 let val = p[idx + 1..].to_string();
                 props.insert(key, val);
             }
@@ -279,7 +281,8 @@ fn ics_props(block: &str) -> std::collections::HashMap<String, String> {
     }
     if let Some(p) = pending {
         if let Some(idx) = p.find(':') {
-            let key = p[..idx].to_uppercase();
+            let raw_key = &p[..idx];
+            let key = raw_key.split(';').next().unwrap().to_uppercase();
             let val = p[idx + 1..].to_string();
             props.insert(key, val);
         }
@@ -290,7 +293,8 @@ fn ics_props(block: &str) -> std::collections::HashMap<String, String> {
 /// Returns (y, m, d, (h, m), is_utc, all_day).
 #[allow(clippy::type_complexity)]
 fn parse_dtstart(s: &str) -> Option<(i32, u32, u32, (u32, u32), bool, bool)> {
-    let value = s.split(':').nth(1)?;
+    // s may be just "20260831T100000" (from ics_props) or full "DTSTART;TZID=...:20260831T100000"
+    let value = s.rsplit(':').next().unwrap_or(s);
     let (date, time) = match value.split_once('T') {
         Some((d, t)) => (d, Some(t)),
         None => (value, None),
