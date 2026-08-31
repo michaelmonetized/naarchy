@@ -42,6 +42,7 @@ impl ClipPage {
 
         let list = ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::None);
+        list.add_css_class("na-clip-list");
         scroll.set_child(Some(&list));
         root.append(&scroll);
 
@@ -124,24 +125,25 @@ fn clip_row(shared: &Rc<Shared>, e: &crate::services::ClipEntry) -> ListBoxRow {
     };
     let kind_l = label(&["na-kind"], kind);
 
-    let pin = if e.pinned { "  ★" } else { "" };
     let preview_txt = match e.kind {
-        ClipKind::Image => format!(
-            "Image ({}){pin}",
-            crate::util::human_size(blob_size(shared, e))
-        ),
-        ClipKind::Text => format!("{}{pin}", e.preview.replace('\n', " ⏎ ")),
+        ClipKind::Image => format!("Image ({})", crate::util::human_size(blob_size(shared, e))),
+        ClipKind::Text => e.preview.replace('\n', " ⏎ "),
     };
     let prev = label(&["na-clip-preview"], &preview_txt);
     prev.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-    prev.set_max_width_chars(52);
+    prev.set_max_width_chars(48);
     prev.set_hexpand(true);
     prev.set_xalign(0.0);
 
-    let when = label(&["na-mute"], &ago(e.at));
+    let pin_l = label(&["na-pin"], "★");
+    pin_l.set_visible(e.pinned);
+    pin_l.set_valign(gtk4::Align::Center);
+
+    let when = label(&["na-clip-time"], &ago(e.at));
 
     h.append(&kind_l);
     h.append(&prev);
+    h.append(&pin_l);
     h.append(&when);
     row.set_child(Some(&h));
 

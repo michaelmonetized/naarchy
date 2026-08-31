@@ -170,6 +170,7 @@ window.naarchy scrollbar,
 window.naarchy revealer,
 window.naarchy stack,
 window.naarchy scrolledwindow,
+window.naarchy viewport,
 window.naarchy flowbox,
 window.naarchy flowboxchild,
 window.naarchy listbox,
@@ -405,13 +406,16 @@ window.naarchy box.na-drop-veil {{
 .na-clip-row {{
   border-radius: 14px;
   padding: 10px 12px;
-  background-color: transparent;
-  transition: background-color 140ms {ease};
+  margin: 2px 0;
+  background-color: {glass};
+  border: 1px solid {border};
+  transition: background-color 140ms {ease}, border-color 140ms {ease}, transform 140ms {ease};
 }}
-.na-clip-row:hover {{ background-color: {glass_2}; }}
+.na-clip-row:hover {{ background-color: {glass_2}; border-color: rgba({accent_rgb}, 0.22); transform: translateY(-1px); }}
 .na-clip-preview {{
   font-size: 13px;
   font-weight: 500;
+  color: {fg};
 }}
 .na-pin {{ color: {accent}; font-weight: 800; }}
 .na-kind {{
@@ -419,6 +423,15 @@ window.naarchy box.na-drop-veil {{
   font-size: 14px;
   color: {fg_dim};
   min-width: 18px;
+}}
+.na-clip-time {{
+  font-size: 11px;
+  font-weight: 600;
+  color: {fg_dim};
+  font-feature-settings: "tnum";
+}}
+.na-clip-list {{
+  background-color: transparent;
 }}
 
 .na-cal-day {{

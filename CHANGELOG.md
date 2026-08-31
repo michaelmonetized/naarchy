@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — calendar docs, media observer, clipboard facelift
+
+- **Calendar**: explain where to add ICS in `~/.config/naarchy/config.toml:36` at bottom `[calendar]` `feeds = ["https://.../basic.ics"]` with Google (Settings → Integrate calendar → Secret address in iCal format) and iCloud (Share Calendar → Public Calendar) examples (`docs/CONFIG.md:62`); auto-migrate old configs missing `[calendar]` (`src/config.rs:220`).
+- **Media**: make pill & widget a universal MPRIS observer — not cliamp-only. Pill now shows only playing (`src/ui/pill.rs:326` `music_on = s.playing`), icon-only (art or `MUSIC`) to fix cut-off text to right of notch; stale `cliamp quit` no longer lingers because `scan_and_emit` ranked snapshot is tried in order and failed snaps clear to `Media(None)` (`src/services/mpris.rs:227`). Any app that speaks MPRIS — `mpv`, `vlc`, `ncspot`/`spotify`, `chromium --app` (Spotify web shows as `org.mpris.MediaPlayer2.chromium.*` with title/artist/artUrl) — now lights the pill icon and full Home Media widget (play/pause, seek, art) with live 900 ms ticker. `cliamp` without MPRIS will still say nothing playing — use an MPRIS player.
+- **Clipboard**: ditch fugly white card — rows now `glass` with `border` (`src/theme.rs:405`), `na-clip-time` `0.72` vs `0.52` so `now/1m/7m` visible (`src/ui/clipview.rs:141`), pin `★` in accent, `ListBox` transparent viewport (`src/theme.rs:155`), `na-clip-list` class.
+
 ## 0.2.1 — settings hit-test + cursor
 
 - Fix settings gear not clickable: `dock_wrap` was outside `apply_input_region` so hover counted as leave → panel collapsed before click; now `dock_wrap` rect (dock + gear) is the hit region and throttled to 20 Hz (`src/ui/panel.rs:363`).

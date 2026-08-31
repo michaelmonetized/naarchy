@@ -1,14 +1,13 @@
 # Config
 
-Path: `~/.config/naarchy/config.toml`
+Path: `~/.config/naarchy/config.toml` (`~/.config/naarchy/config.toml:1` in your screenshot — hot-reloads on save, settings gear opens it in Neovim via `omarchy-launch-config-editor`).
 
-Written on first run if missing. **Hot-reload** every 700 ms compares the file
+Written on first run if missing. **Hot-reload** every 1100 ms compares the file
 as a string (not mtime). A save restyles colors, sizes, opacity. It does **not**
-rebuild surfaces. Changing `behavior.monitors` or dock-hiding feature flags
-requires a restart.
+rebuild surfaces. Changing `behavior.monitors`, `calendar.feeds`, or dock-hiding feature flags
+requires a restart (`systemctl --user restart naarchy`).
 
-Existing files are never rewritten. A tester who already has
-`notifications = true` keeps it.
+Existing files are never overwritten, but if `[calendar]` is missing (pre-0.2 installs like yours) naarchy appends it on next run. You can also add it manually at the bottom.
 
 ## Schema (defaults)
 
@@ -24,7 +23,7 @@ omarchy = true            # follow the active omarchy colors.toml
 radius = 24
 notch_mode = false
 # pill_width_notch = 190
-# pill_width_island = 367
+# pill_width_island = 392
 # margin_top = 0
 panel_width = 760
 panel_height = 540
@@ -57,11 +56,16 @@ timeout_ms = 1400
 
 [clock]
 format = "%H:%M"
-show_in_pill = true
+show_in_pill = false      # the bar already has a clock
 
 [calendar]
-feeds = []                # public ICS URLs
-refresh_min = 5
+feeds = []                # public iCloud / Google ICS feed URLs (one per line)
+# feeds = ["https://calendar.google.com/calendar/ical/xxxxxxxx%40gmail.com/public/basic.ics"]
+# feeds = ["webcal://p123-caldav.icloud.com/published/2/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ics"]
+#   Google: Calendar → Settings → Integrate calendar → Public URL / Secret address in iCal format
+#   iCloud: Calendar → Share Calendar → Public Calendar → Copy Link (webcal:// → https://)
+#   After editing feeds: systemctl --user restart naarchy
+refresh_min = 5           # minutes between fetches
 ```
 
 ## Feature flags vs widgets

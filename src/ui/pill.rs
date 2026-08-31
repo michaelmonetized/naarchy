@@ -28,6 +28,7 @@ pub struct PillUi {
     timer_icon: Label,
     timer_count: Label,
     media_art: gtk4::Box,
+    media_icon: Label,
     media_title: Label,
     files_icon: Label,
     files_count: Label,
@@ -100,9 +101,12 @@ impl PillUi {
         media_art.set_overflow(gtk4::Overflow::Hidden);
         media_art.set_size_request(22, 22);
         media_art.set_visible(false);
+        let media_icon = label(&["na-bubble-text", "na-glyph"], super::g::MUSIC);
+        media_icon.set_visible(false);
         let files_icon = label(&["na-bubble-text", "na-glyph"], super::g::FOLDER);
         left_box.append(&timer_icon);
         left_box.append(&media_art);
+        left_box.append(&media_icon);
         left_box.append(&files_icon);
 
         // Center notch / island
@@ -217,6 +221,7 @@ impl PillUi {
             timer_icon,
             timer_count,
             media_art,
+            media_icon,
             media_title,
             files_icon,
             files_count,
@@ -323,7 +328,8 @@ impl PillUi {
 
         let done_on = features.timer && sh.timer_done_until.get() > super::now_secs();
         let timer_on = features.timer && timer.as_ref().is_some_and(|t| t.remaining_secs() > 0);
-        let music_on = features.media && media.is_some();
+        // only consider media live when actually playing — paused/stopped shouldn't linger
+        let music_on = features.media && media.as_ref().is_some_and(|s| s.playing);
         let files_on = features.shelf && count > 0;
 
         let mood = if done_on {
@@ -347,34 +353,30 @@ impl PillUi {
         } else {
             self.timer_icon.set_text(super::g::CLOCK);
         }
-        if let Some(st) = media.as_ref() {
-            let txt = if !st.title.is_empty() {
-                format!("{} · {}", truncate(&st.title, 22), truncate(&st.artist, 14))
-            } else {
-                st.player.clone()
-            };
-            self.media_title.set_text(&txt);
-        }
         if mood == Mood::Files {
             self.files_count.set_text(&format!("{}", count.min(99)));
         }
 
-        // Icon left of the notch, countdown/text right of it.
-        let bubble_on = matches!(mood, Mood::Timer | Mood::Done | Mood::Files);
+        // Pill collapsed state: for Media we show just a music icon (or 22px art) on the left
+        // — no right-side text to avoid the “cut off by notch” bug the user reported.
+        // Title/artist belong in the expanded Home Media widget, not the pill.
+        let art_ok = mood == Mood::Media && self.media_art.is_visible();
+        self.media_icon.set_visible(mood == Mood::Media && !art_ok);
+        self.media_art.set_visible(art_ok);
+
+        let bubble_on = matches!(mood, Mood::Timer | Mood::Done | Mood::Files | Mood::Media);
+        // left bubble holds timer icon / music icon-art / files icon
         self.left_box.set_visible(bubble_on);
-        self.right_box.set_visible(mood != Mood::None);
+        // right bubble only for timer/files — media pill is icon-only to stay crisp
+        self.right_box
+            .set_visible(matches!(mood, Mood::Timer | Mood::Done | Mood::Files));
         let timer_page = matches!(mood, Mood::Timer | Mood::Done);
         self.timer_icon.set_visible(timer_page);
         self.timer_count.set_visible(timer_page);
-        self.media_title.set_visible(mood == Mood::Media);
+        // never show truncated title in the pill; Home widget shows full title
+        self.media_title.set_visible(false);
         self.files_icon.set_visible(mood == Mood::Files);
         self.files_count.set_visible(mood == Mood::Files);
-        // Album art only fills the left bubble when we actually have art.
-        let art_ok = mood == Mood::Media && self.media_art.is_visible();
-        self.media_art.set_visible(art_ok);
-        if mood == Mood::Media && !art_ok {
-            self.left_box.set_visible(false);
-        }
         mood
     }
 
@@ -481,6 +483,7 @@ fn draw_notch(cr: &gtk4::cairo::Context, w: f64, h: f64, rt: f64, rb: f64, color
     let _ = cr.fill();
 }
 
+#[allow(dead_code)]
 fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }

@@ -219,6 +219,13 @@ impl Config {
 
     pub fn save_default_if_missing(path: &Path) {
         if path.exists() {
+            // migrate: ensure [calendar] exists for discoverability (old 0.1 installs)
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if !content.contains("[calendar]") {
+                    let snippet = "\n[calendar]\nfeeds = []            # public iCloud / Google ICS feed URLs (one per line)\n# feeds = [\"https://calendar.google.com/calendar/ical/xxxx/basic.ics\"]\nrefresh_min = 5\n";
+                    let _ = std::fs::write(path, format!("{}{}", content.trim_end(), snippet));
+                }
+            }
             return;
         }
         let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new("/")));

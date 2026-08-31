@@ -230,24 +230,30 @@ async fn scan_and_emit(
     tx: &Sender<Event>,
 ) -> zbus::Result<()> {
     let names = list_player_names(conn).await;
-    let mut best: Option<(bool, usize)> = None; // (playing, index)
-    for (i, bus) in names.iter().enumerate() {
-        let playing = matches!(quick_status(conn, bus).await.as_deref(), Some("Playing"));
-        let prefer = (playing, i);
-        if best.map(|b| prefer > b).unwrap_or(true) {
-            best = Some(prefer);
-            *active = Some(bus.clone());
-        }
-    }
     if names.is_empty() {
         *active = None;
         let _ = tx.send(Event::Media(None));
         return Ok(());
     }
-    let act = active.clone().or_else(|| names.first().cloned()).unwrap();
-    if let Ok(st) = snapshot(conn, &act).await {
-        let _ = tx.send(Event::Media(Some(st)));
+    // rank candidates: playing first, then by original order; try snapshot in that order
+    // so a dying bus (snapshot failure) doesn't leave stale state
+    let mut ranked: Vec<(bool, usize, &String)> = Vec::new();
+    for (i, bus) in names.iter().enumerate() {
+        let playing = matches!(quick_status(conn, bus).await.as_deref(), Some("Playing"));
+        ranked.push((playing, i, bus));
     }
+    // playing=true sorts before false; lower i first
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    for (_, _, bus) in ranked {
+        if let Ok(st) = snapshot(conn, bus).await {
+            *active = Some(bus.clone());
+            let _ = tx.send(Event::Media(Some(st)));
+            return Ok(());
+        }
+    }
+    // all snapshots failed → clear stale state
+    *active = None;
+    let _ = tx.send(Event::Media(None));
     Ok(())
 }
 
