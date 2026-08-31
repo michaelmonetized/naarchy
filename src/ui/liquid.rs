@@ -1,12 +1,22 @@
-//! The expanded shelf silhouette: a single rounded glass capsule that
-//! grows out of the notch, with a hairline highlight and a bottom fade
-//! so Hyprland blur (if the user set a layer rule) reads as liquid.
+//! Open-state backdrop: a notch-shaped bloom that hangs off the island.
+//!
+//! No card, no hairline, no box. Black at the island, through the omarchy
+//! background, to transparent — fast falloff, dead before the window edge.
 
-use gtk4::cairo::{self, Context, LinearGradient};
+use gtk4::cairo::{self, Context, RadialGradient};
 use gtk4::gdk::prelude::*;
 use gtk4::prelude::*;
 
-const PI: f64 = std::f64::consts::PI;
+/// Closed-island size. Match the 16" MacBook camera housing
+/// (narrower and taller than a Dynamic Island pancake).
+pub const NOTCH_W: f64 = 392.0;
+pub const NOTCH_H: f64 = 72.0;
+
+/// Transparent gutter so the bloom never kisses the layer-shell rectangle.
+const EDGE_GUTTER: f64 = 40.0;
+
+/// Panel layer width relative to `appearance.panel_width` (veil hangs past content).
+pub const PANEL_WINDOW_SCALE: f64 = 1.75;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Capsule {
@@ -14,7 +24,6 @@ pub struct Capsule {
     pub y: f64,
     pub w: f64,
     pub h: f64,
-    pub r: f64,
 }
 
 impl Capsule {
@@ -36,98 +45,178 @@ pub fn geom(win_w: f64, win_h: f64, progress: f64, dock_reserve: f64) -> Capsule
     let win_w = win_w.max(120.0);
     let win_h = win_h.max(dock_reserve + 24.0);
     let t = progress.max(0.0);
-    let max_w = (win_w - 8.0).max(120.0);
-    let max_h = (win_h - dock_reserve - 6.0).max(64.0);
+    let max_w = (win_w - EDGE_GUTTER * 2.0).max(120.0);
+    let max_h = (win_h - dock_reserve - EDGE_GUTTER).max(64.0);
     let min_w = 168.0_f64.min(max_w);
     let min_h = 32.0_f64.min(max_h);
     let w = (min_w + (max_w - min_w) * t).clamp(8.0, win_w);
     let h = (min_h + (max_h - min_h) * t).clamp(8.0, max_h + 12.0);
-    let r = (22.0 + 18.0 * t.min(1.0))
-        .min(h * 0.5)
-        .min(w * 0.5)
-        .min(42.0);
     Capsule {
         x: ((win_w - w) * 0.5).max(0.0),
         y: 0.0,
         w,
         h,
-        r,
     }
 }
 
 pub const DOCK_RESERVE: f64 = 78.0;
 
-/// Paint the glass capsule. `fill` is the theme background, `alpha` the
-/// configured opacity. Leaves the rest of the surface untouched (transparent).
+/// Append the island silhouette: top is the widest line (flush), concave
+/// ears, inset walls, convex bottom that pulls in.
+pub fn path_notch(cr: &Context, x: f64, y: f64, w: f64, h: f64, rt: f64, rb: f64) {
+    let rt = rt.min(w * 0.45).min(h * 0.45).max(0.0);
+    let rb = rb.min(w * 0.45).min(h * 0.45).max(0.0);
+    cr.new_path();
+    if w < 4.0 || h < 4.0 || rt + rb > h - 1.0 {
+        cr.rectangle(x, y, w.max(0.0), h.max(0.0));
+        return;
+    }
+    cr.move_to(x, y);
+    quad_to(cr, x, y, x + rt, y, x + rt, y + rt);
+    cr.line_to(x + rt, y + h - rb);
+    quad_to(cr, x + rt, y + h - rb, x + rt, y + h, x + rt + rb, y + h);
+    cr.line_to(x + w - rt - rb, y + h);
+    quad_to(
+        cr,
+        x + w - rt - rb,
+        y + h,
+        x + w - rt,
+        y + h,
+        x + w - rt,
+        y + h - rb,
+    );
+    cr.line_to(x + w - rt, y + rt);
+    quad_to(cr, x + w - rt, y + rt, x + w - rt, y, x + w, y);
+    cr.close_path();
+}
+
+fn quad_to(cr: &Context, sx: f64, sy: f64, cx: f64, cy: f64, ex: f64, ey: f64) {
+    cr.curve_to(
+        (sx + 2.0 * cx) / 3.0,
+        (sy + 2.0 * cy) / 3.0,
+        (2.0 * cx + ex) / 3.0,
+        (2.0 * cy + ey) / 3.0,
+        ex,
+        ey,
+    );
+}
+
+pub fn notch_radii() -> (f64, f64) {
+    let top_r = (NOTCH_H * 0.16).clamp(8.0, 14.0);
+    let bot_r = (NOTCH_H * 0.24).clamp(10.0, 18.0).min(NOTCH_H * 0.32);
+    (top_r, bot_r)
+}
+
+/// Paint the open-state bloom.
+///
+/// `fill` is the omarchy background the shadow passes through. `alpha` scales
+/// the whole effect (no floor — a floor was painting a visible card).
 pub fn draw(cr: &Context, cap: Capsule, fill: (u8, u8, u8), alpha: f64) {
     if cap.w < 4.0 || cap.h < 4.0 {
         return;
     }
-    let (fr, fg, fb) = (
+    let (tr, tg, tb) = (
         fill.0 as f64 / 255.0,
         fill.1 as f64 / 255.0,
         fill.2 as f64 / 255.0,
     );
-    let a = alpha.clamp(0.35, 1.0);
+    let gain = alpha.clamp(0.0, 1.0);
+    let (rt, rb) = notch_radii();
 
-    // Soft contact shadow — a few offset copies, no real blur available.
-    for i in 1..=5 {
-        let o = i as f64;
-        rounded_rect(cr, cap.x, cap.y + o * 1.1, cap.w, cap.h + o * 0.4, cap.r);
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.055 / o);
+    let nw = NOTCH_W.min(cap.w.max(8.0));
+    let nh = NOTCH_H.min(cap.h.max(8.0));
+    let nx = cap.x + (cap.w - nw) * 0.5;
+    let ny = cap.y;
+    let cx = nx + nw * 0.5;
+
+    // Droppy-scale veil: dense under the island, through the theme across
+    // the content, then a cliff to transparent *inside* `cap` so the
+    // layer-shell rectangle never reads as an edge.
+    //
+    // Plateau then crash — large, not a 40px smudge.
+    let falloff = |t: f64| -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        let cliff = ((t - 0.52) / 0.48).clamp(0.0, 1.0);
+        (1.0 - t * 0.22) * (1.0 - cliff).powi(3)
+    };
+
+    let cy = ny + nh * 0.40;
+    // Wide and shallow — window is 1.75× content; bloom is a squat veil.
+    const BLOOM_H: f64 = 0.50;
+    let rx = ((cx - cap.x).min(cap.x + cap.w - cx)).max(8.0);
+    let ry = ((cap.y + cap.h - cy) * BLOOM_H).max(8.0);
+    let _ = cr.save();
+    cr.translate(cx, cy);
+    cr.scale(rx, ry);
+    let wash = RadialGradient::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+    wash.add_color_stop_rgba(0.00, 0.0, 0.0, 0.0, 0.96 * gain);
+    wash.add_color_stop_rgba(0.12, 0.0, 0.0, 0.0, 0.84 * gain);
+    wash.add_color_stop_rgba(0.28, 0.0, 0.0, 0.0, 0.62 * gain);
+    wash.add_color_stop_rgba(0.48, 0.0, 0.0, 0.0, 0.34 * gain);
+    wash.add_color_stop_rgba(0.64, tr, tg, tb, 0.16 * gain);
+    wash.add_color_stop_rgba(0.82, tr, tg, tb, 0.04 * gain);
+    wash.add_color_stop_rgba(1.00, tr, tg, tb, 0.0);
+    cr.arc(0.0, 0.0, 1.0, 0.0, std::f64::consts::TAU);
+    cr.clip();
+    let _ = cr.set_source(&wash);
+    let _ = cr.paint();
+    let _ = cr.restore();
+
+    // Notch-following umbra. Grows farther *down* than sideways — a pool
+    // hanging off the island, still inside the gutter. Stay black for most
+    // of the radius; mix to theme only on the cliff so a dark desktop
+    // still shows a Droppy-sized veil.
+    let pad_x = ((cap.w - nw) * 0.5 * 0.92).max(0.0);
+    let pad_y = ((cap.h - nh) * 0.90 * BLOOM_H).max(0.0);
+    const COPIES: i32 = 18;
+    for i in (1..=COPIES).rev() {
+        let t = i as f64 / COPIES as f64;
+        let fade = falloff(t);
+        if fade < 0.015 {
+            continue;
+        }
+        let mix = ((t - 0.50) / 0.38).clamp(0.0, 1.0);
+        let mix = mix * mix;
+        let a = (0.28 * fade * gain).min(0.50);
+        let px = pad_x * t;
+        let py = pad_y * t;
+        path_notch(
+            cr,
+            nx - px,
+            ny,
+            nw + px * 2.0,
+            nh + py,
+            rt + px * 0.10,
+            rb + py * 0.08,
+        );
+        cr.set_source_rgba(tr * mix, tg * mix, tb * mix, a);
         let _ = cr.fill();
     }
 
-    rounded_rect(cr, cap.x, cap.y, cap.w, cap.h, cap.r);
-    cr.clip();
-
-    let g = LinearGradient::new(0.0, cap.y, 0.0, cap.y + cap.h);
-    g.add_color_stop_rgba(0.00, fr, fg, fb, a);
-    g.add_color_stop_rgba(0.74, fr, fg, fb, a * 0.97);
-    g.add_color_stop_rgba(1.00, fr, fg, fb, a * 0.58);
-    let _ = cr.set_source(&g);
-    let _ = cr.paint();
-
-    // Inner top sheen — the glass lip.
-    let sheen = LinearGradient::new(0.0, cap.y, 0.0, cap.y + cap.h * 0.22);
-    sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.10);
-    sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
-    let _ = cr.set_source(&sheen);
-    let _ = cr.paint();
-
-    cr.reset_clip();
-
-    // Hairline rim.
-    rounded_rect(
-        cr,
-        cap.x + 0.5,
-        cap.y + 0.5,
-        cap.w - 1.0,
-        cap.h - 1.0,
-        (cap.r - 0.5).max(0.0),
-    );
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
-    cr.set_line_width(1.0);
-    let _ = cr.stroke();
-}
-
-fn rounded_rect(cr: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    let r = r.min(w * 0.5).min(h * 0.5).max(0.0);
-    cr.new_path();
-    if r < 0.5 {
-        cr.rectangle(x, y, w, h);
-        return;
+    // Stroke on the true island path — the silhouette of the drop.
+    let max_stroke = (pad_x.min(pad_y) * 1.6).max(0.0);
+    if max_stroke > 2.0 {
+        cr.set_line_join(cairo::LineJoin::Round);
+        cr.set_line_cap(cairo::LineCap::Round);
+        const LAYERS: i32 = 8;
+        for i in (1..=LAYERS).rev() {
+            let t = i as f64 / LAYERS as f64;
+            let fade = falloff(t);
+            if fade < 0.02 {
+                continue;
+            }
+            let mix = ((t - 0.50) / 0.38).clamp(0.0, 1.0);
+            let mix = mix * mix;
+            path_notch(cr, nx, ny, nw, nh, rt, rb);
+            cr.set_source_rgba(tr * mix, tg * mix, tb * mix, (fade * 0.28 * gain).min(0.45));
+            cr.set_line_width(max_stroke * t);
+            let _ = cr.stroke();
+        }
     }
-    cr.move_to(x + r, y);
-    cr.line_to(x + w - r, y);
-    cr.arc(x + w - r, y + r, r, -PI * 0.5, 0.0);
-    cr.line_to(x + w, y + h - r);
-    cr.arc(x + w - r, y + h - r, r, 0.0, PI * 0.5);
-    cr.line_to(x + r, y + h);
-    cr.arc(x + r, y + h - r, r, PI * 0.5, PI);
-    cr.line_to(x, y + r);
-    cr.arc(x + r, y + r, r, PI, PI * 1.5);
-    cr.close_path();
+
+    path_notch(cr, nx, ny, nw, nh, rt, rb);
+    cr.set_source_rgb(0.0, 0.0, 0.0);
+    let _ = cr.fill();
 }
 
 /// Restrict pointer hits to the capsule + dock so empty glass around them
@@ -182,7 +271,6 @@ mod tests {
         assert!(a.w < b.w);
         assert!(a.h < b.h);
         assert!(b.w > 700.0);
-        assert!(a.r > 0.0 && b.r > a.r - 1.0);
     }
 
     #[test]

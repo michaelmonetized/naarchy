@@ -78,19 +78,26 @@ fn rebuild(shared: &Rc<Shared>, list: &ListBox, empty: &Label, filter: Option<&s
     while let Some(c) = list.first_child() {
         list.remove(&c);
     }
-    let entries: Vec<_> = shared.clips.borrow().entries.clone();
-    let f = filter.map(|s| s.to_lowercase()).unwrap_or_default();
-    let shown: Vec<_> = entries
-        .iter()
-        .filter(|e| f.is_empty() || e.preview.to_lowercase().contains(&f))
-        .cloned()
-        .collect();
-    empty.set_visible(shown.is_empty());
-    list.set_visible(!shown.is_empty());
-    for e in shown {
+    let f = filter.map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+    // collect filtered clones while holding borrow, then drop it before building rows
+    // to avoid double-borrow panic in clip_row -> blob_size
+    let filtered: Vec<crate::services::ClipEntry> = {
+        let store = shared.clips.borrow();
+        store
+            .entries
+            .iter()
+            .filter(|e| f.is_empty() || e.preview.to_ascii_lowercase().contains(&f))
+            .take(200)
+            .cloned()
+            .collect()
+    };
+    for e in filtered.iter() {
         let row = clip_row(shared, e);
         list.append(&row);
     }
+    let is_empty = filtered.is_empty();
+    empty.set_visible(is_empty);
+    list.set_visible(!is_empty);
 }
 
 fn ago(ts: u64) -> String {
@@ -104,7 +111,7 @@ fn ago(ts: u64) -> String {
     }
 }
 
-fn clip_row(shared: &Rc<Shared>, e: crate::services::ClipEntry) -> ListBoxRow {
+fn clip_row(shared: &Rc<Shared>, e: &crate::services::ClipEntry) -> ListBoxRow {
     let row = ListBoxRow::new();
     row.set_css_classes(&["na-clip-row"]);
     row.set_activatable(true);
@@ -121,7 +128,7 @@ fn clip_row(shared: &Rc<Shared>, e: crate::services::ClipEntry) -> ListBoxRow {
     let preview_txt = match e.kind {
         ClipKind::Image => format!(
             "Image ({}){pin}",
-            crate::util::human_size(blob_size(shared, &e))
+            crate::util::human_size(blob_size(shared, e))
         ),
         ClipKind::Text => format!("{}{pin}", e.preview.replace('\n', " ⏎ ")),
     };

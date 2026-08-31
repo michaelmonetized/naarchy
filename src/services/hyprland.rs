@@ -47,11 +47,20 @@ pub struct HyprlandHandle {
     pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Hit-test for stay-open while expanded: pill + panel, not the 8px open band.
+pub struct HoverZone {
+    pub band_px: f64,
+    pub pill_w: f64,
+    pub pill_h: f64,
+    pub panel_w: f64,
+    pub panel_h: f64,
+}
+
 /// Spawns the hover sampler + fullscreen/monitor event watcher.
 /// Falls back silently on non-Hyprland compositors.
 pub fn spawn(
     tx: Sender<Event>,
-    hover_band_px: i32,
+    zone: HoverZone,
     hover_ms: u64,
     hover_open: bool,
 ) -> HyprlandHandle {
@@ -96,34 +105,49 @@ pub fn spawn(
         });
     }
 
-    // Hover sampler thread: sample cursorpos, dwell → HoverOpen
+    // Hover sampler: top-edge dwell opens. Once open, stay until the
+    // cursor leaves the pill *and* the panel — not the 8px open strip.
     if hover_open {
         let tx = tx.clone();
         let stop2 = stop.clone();
         std::thread::spawn(move || {
-            let band = hover_band_px.max(1) as f64;
+            let band = zone.band_px.max(1.0);
             let dwell = Duration::from_millis(hover_ms.clamp(60, 2000));
             let mut in_band_since: Option<Instant> = None;
             let mut sent_open = false;
-            let idle = Duration::from_millis(33);
+            let mut mon = monitor_box();
+            let mut mon_tick = Instant::now();
+            let idle = Duration::from_millis(60);
             while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
+                if mon_tick.elapsed() > Duration::from_secs(2) {
+                    if let Some(m) = monitor_box() {
+                        mon = Some(m);
+                    }
+                    mon_tick = Instant::now();
+                }
                 let pos = request("cursorpos");
                 match pos.and_then(|p| parse_pos(&p)) {
                     Some((x, y)) => {
-                        if y <= band {
-                            let since = *in_band_since.get_or_insert_with(Instant::now);
-                            if !sent_open && since.elapsed() >= dwell {
-                                let _ = tx.send(Event::HoverOpen);
-                                sent_open = true;
+                        let in_open_strip = y <= band;
+                        let on_surface = mon
+                            .map(|(mx, mw)| over_surface(x, y, mx, mw, &zone))
+                            .unwrap_or(false);
+                        if !sent_open {
+                            if in_open_strip {
+                                let since = *in_band_since.get_or_insert_with(Instant::now);
+                                if since.elapsed() >= dwell {
+                                    let _ = tx.send(Event::HoverOpen);
+                                    sent_open = true;
+                                }
+                            } else {
+                                in_band_since = None;
                             }
-                            let _ = x; // full-width band for now
+                        } else if in_open_strip || on_surface {
+                            in_band_since = None;
                         } else {
                             in_band_since = None;
-                            if sent_open {
-                                // pointer left the band; tell UI to consider collapse
-                                let _ = tx.send(Event::HoverEnd);
-                                sent_open = false;
-                            }
+                            let _ = tx.send(Event::HoverEnd);
+                            sent_open = false;
                         }
                     }
                     None => {
@@ -141,4 +165,34 @@ pub fn spawn(
 fn parse_pos(s: &str) -> Option<(f64, f64)> {
     let (x, y) = s.split_once(',')?;
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+fn json_f64(v: &serde_json::Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|i| i as f64))
+        .or_else(|| v.as_u64().map(|i| i as f64))
+}
+
+/// Focused (or first) monitor origin and width, for centering the panel hit-test.
+fn monitor_box() -> Option<(f64, f64)> {
+    let raw = request("j/monitors")?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let arr = v.as_array()?;
+    let m = arr
+        .iter()
+        .find(|m| m.get("focused").and_then(|f| f.as_bool()) == Some(true))
+        .or(arr.first())?;
+    let x = json_f64(m.get("x")?)?;
+    let w = json_f64(m.get("width")?)?;
+    Some((x, w))
+}
+
+fn over_surface(x: f64, y: f64, mon_x: f64, mon_w: f64, zone: &HoverZone) -> bool {
+    if y < 0.0 {
+        return false;
+    }
+    let lx = x - mon_x;
+    let cx = mon_w * 0.5;
+    let in_x = |half: f64| (lx - cx).abs() <= half + 16.0;
+    (y <= zone.pill_h && in_x(zone.pill_w * 0.5)) || (y <= zone.panel_h && in_x(zone.panel_w * 0.5))
 }

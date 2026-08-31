@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — perf + timer + settings
+
+- **Perf**: stable FNV cache_key fixes art/shelf/clip re-download each restart; cached `Palette` removes per-frame omarchy file I/O (pill/timer/liquid); `idle`→`timeout 16ms` stops busy-loop wake; throttled `apply_input_region` (~20 Hz); liquid `COPIES 32→18 LAYERS 16→8`; hyprland hover `33→60ms` + surface-aware stay-open; mpris `1.5s→2s` + `400→900ms`; clipboard `600→900ms`; config watcher `700→1100ms`; pill `measure` only on mood change; clipview borrow without 400 `to_lowercase` allocs per keystroke; `parse_payload` O(n²)→O(n).
+- **Timer**: replaces ugly ruler with circular ring + big clock + presets + `25m / 90s` entry; visual bell pulsates + `Revealer` shake; audible loop every 3 s for 60 s via `pw-play→paplay→aplay→ffplay→canberra` + `display.beep()` fallback; `Done` state lasts 60 s.
+- **HUD**: fix `|| true` bug that dismissed critical banners; destroy oldest banner instead of leaking `ApplicationWindow`.
+- **Settings**: gear `na-dock-btn` in dock opens `~/.config/naarchy/config.toml` via `omarchy-launch-config-editor` (→ `omarchy-launch-editor` → `nvim` in `omarchy-launch-tui`), mirroring every Omarchy plugin.
+- **UI polish**: dock settings button, `na-preset` hover border, `na-timer-*` animations, less jank on expand/collapse, pill width spring gated.
+
 ## 0.1.0
 
 First GTM cut.

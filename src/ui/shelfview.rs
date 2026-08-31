@@ -1,8 +1,7 @@
-use super::panel::handle_dropped_value;
 use super::{g, label, Shared};
 use crate::shelf_store::ShelfItem;
 use gtk4::prelude::*;
-use gtk4::{gdk, glib, Button, DropTarget, FlowBox, FlowBoxChild, GestureClick};
+use gtk4::{gdk, glib, Button, FlowBox, FlowBoxChild, GestureClick};
 use std::rc::Rc;
 
 pub struct ShelfPage {
@@ -61,26 +60,6 @@ impl ShelfPage {
         empty.append(&ic);
         empty.append(&hint);
         root.append(&empty);
-
-        {
-            let formats = gdk::ContentFormats::builder()
-                .add_type(gdk::Texture::static_type())
-                .add_mime_type("text/uri-list")
-                .add_mime_type("text/plain;charset=utf-8")
-                .add_mime_type("text/plain")
-                .add_mime_type("image/png")
-                .build();
-            let dt = DropTarget::builder()
-                .formats(&formats)
-                .actions(gdk::DragAction::COPY)
-                .build();
-            let sh = shared.clone();
-            dt.connect_drop(move |_dt, value, _x, _y| {
-                handle_dropped_value(&sh, value);
-                true
-            });
-            root.add_controller(dt);
-        }
 
         let p = Self { root, grid, empty };
         p.reload();

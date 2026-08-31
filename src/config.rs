@@ -46,7 +46,7 @@ impl Default for Appearance {
             notch_mode: false,
             margin_top: 0,
             pill_width_notch: 190,
-            pill_width_island: 367,
+            pill_width_island: 392,
             panel_width: 760,
             panel_height: 540,
             opacity: 0.98,
@@ -166,7 +166,7 @@ impl Default for ClockCfg {
     fn default() -> Self {
         Self {
             format: "%H:%M".into(),
-            show_in_pill: true,
+            show_in_pill: false,
         }
     }
 }
@@ -235,7 +235,7 @@ omarchy = true          # pull accent/background/foreground from the active omar
 radius = 24
 notch_mode = false        # true = hug a physical notch (~190px pill)
 # pill_width_notch = 190
-# pill_width_island = 367
+# pill_width_island = 392
 # margin_top = 0            # pixels below the top edge (0 = flush)
 panel_width = 760
 panel_height = 540
@@ -267,7 +267,7 @@ timeout_ms = 1400
 
 [clock]
 format = "%H:%M"
-show_in_pill = true
+show_in_pill = false     # the bar already has a clock
 
 [calendar]
 feeds = []            # public iCloud / Google ICS feed URLs (one per line)
@@ -305,7 +305,7 @@ impl ConfigWatcher {
                         break;
                     }
                 }
-                std::thread::sleep(Duration::from_millis(700));
+                std::thread::sleep(Duration::from_millis(1100));
             }
         });
         Self { stop }

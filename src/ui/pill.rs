@@ -5,8 +5,8 @@ use gtk4::{gdk, ApplicationWindow, EventControllerMotion, GestureClick, Label};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-const PILL_H: i32 = 84;
-const PILL_W: i32 = 367;
+const PILL_H: i32 = super::liquid::NOTCH_H as i32;
+const PILL_W: i32 = super::liquid::NOTCH_W as i32;
 
 /// Which content pair is currently wrapped around the notch.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,7 @@ pub struct PillUi {
     w_target: Rc<Cell<f64>>,
     w_tick: Rc<Cell<Option<gtk4::TickCallbackId>>>,
     last_art_path: RefCell<Option<String>>,
+    last_mood: Cell<Mood>,
 }
 
 impl PillUi {
@@ -63,21 +64,11 @@ impl PillUi {
         };
 
         // Resolve the capsule colors/geometry once (config + omarchy theme).
-        let pal = crate::theme::resolve(&shared.cfg.borrow(), shared.dark.get());
-        let fill = crate::theme::hex_triple(&pal.pill_fill).unwrap_or((0, 0, 0));
+        // use cached palette to avoid per-build file I/O
+        let pal = shared.palette();
+        let fill = (0u8, 0u8, 0u8);
         let flash_color = pal.accent_rgb;
-        let radius = shared.cfg.borrow().appearance.radius.max(18);
-        // Notch geometry (matches the canonical DynamicNotchKit shape): the
-        // top edge is the pill's WIDEST line — it sits flush against the top
-        // of the screen, its top corners cut away by concave "ear" curves
-        // (bezier control point rides the top edge). Straight inset sides,
-        // then the bottom corners round outward and the bottom edge pulls in,
-        // so the pill tapers toward a narrower rounded base.
-        let top_r = (radius as f64 * 0.5).clamp(8.0, 18.0);
-        // The bottom taper must leave the clock/battery chips fully inside the
-        // capsule: constrain it so the flat side-wall region reaches past the
-        // vertically-centered content before the rounding begins.
-        let bot_r = ((radius as f64 * 0.9).clamp(16.0, 30.0)).min(PILL_H as f64 / 2.0 - 20.0);
+        let (top_r, bot_r) = super::liquid::notch_radii();
 
         let win = ApplicationWindow::builder()
             .application(app)
@@ -204,12 +195,17 @@ impl PillUi {
             let sh = shared.clone();
             let motion = EventControllerMotion::new();
             motion.connect_enter(move |_m, _x, _y| {
+                crate::app::surface_pointer_enter();
                 if !sh.expanded.get() && !sh.fullscreen_hide.get() && sh.hover_enabled() {
                     sh.expand_now();
                 }
             });
+            motion.connect_leave(move |_m| {
+                crate::app::surface_pointer_leave();
+            });
             win.add_controller(motion);
         }
+        super::panel::attach_file_drop(&win);
 
         let p = Self {
             win,
@@ -232,6 +228,7 @@ impl PillUi {
             w_target: Rc::new(Cell::new(base_w as f64)),
             w_tick: Rc::new(Cell::new(None)),
             last_art_path: RefCell::new(None),
+            last_mood: Cell::new(Mood::None),
         };
         p.win.present();
         p.tick();
@@ -248,8 +245,15 @@ impl PillUi {
             let fmt = sh.cfg.borrow().clock.format.clone();
             self.clock_label
                 .set_text(&crate::timefmt::strftime_local(super::now_secs(), &fmt));
-            self.update_mood(sh);
-            self.relayout();
+            let mood = self.update_mood(sh);
+            // only re-measure when mood actually changes — measure triggers layout + springs
+            if mood != self.last_mood.get() {
+                self.last_mood.set(mood);
+                self.relayout();
+            } else if mood == Mood::Timer || mood == Mood::Done {
+                // timer countdown text changes each second, but width is stable; no relayout needed
+                // keep size unless timer just appeared
+            }
         });
     }
 
@@ -286,8 +290,11 @@ impl PillUi {
                     self.media_art.set_visible(false);
                 }
             }
-            self.update_mood(sh);
-            self.relayout();
+            let mood = self.update_mood(sh);
+            if mood != self.last_mood.get() {
+                self.last_mood.set(mood);
+                self.relayout();
+            }
         });
     }
 
@@ -307,7 +314,8 @@ impl PillUi {
 
     /// Decide which content pair is live. One pair at a time by priority:
     /// timer done > running timer > playing music > files in the drop zone.
-    fn update_mood(&self, sh: &Rc<Shared>) {
+    /// Returns the resolved mood so callers can gate relayout.
+    fn update_mood(&self, sh: &Rc<Shared>) -> Mood {
         let features = sh.cfg.borrow().features.clone();
         let timer = sh.timer.borrow();
         let media = sh.media.borrow();
@@ -367,6 +375,7 @@ impl PillUi {
         if mood == Mood::Media && !art_ok {
             self.left_box.set_visible(false);
         }
+        mood
     }
 
     /// Pulse the pill (timer finished, …). The cairo silhouette springs
@@ -467,41 +476,9 @@ fn draw_notch(cr: &gtk4::cairo::Context, w: f64, h: f64, rt: f64, rb: f64, color
         return;
     }
 
-    // Start at the top-left corner and walk clockwise (y-down).
-    cr.move_to(0.0, 0.0);
-    // Top-left ear: concave carve (control point rides the top edge).
-    quad_to(cr, 0.0, 0.0, rt, 0.0, rt, rt);
-    // Straight left wall, inset by rt.
-    cr.line_to(rt, h - rb);
-    // Bottom-left convex corner (control point below, on the bottom edge).
-    quad_to(cr, rt, h - rb, rt, h, rt + rb, h);
-    // Bottom edge, pulled in further by the corner rounding.
-    cr.line_to(w - rt - rb, h);
-    // Bottom-right convex corner.
-    quad_to(cr, w - rt - rb, h, w - rt, h, w - rt, h - rb);
-    // Straight right wall.
-    cr.line_to(w - rt, rt);
-    // Top-right ear.
-    quad_to(cr, w - rt, rt, w - rt, 0.0, w, 0.0);
-    // Close along the top edge back to the top-left corner.
-    cr.close_path();
-
+    super::liquid::path_notch(cr, 0.0, 0.0, w, h, rt, rb);
     cr.set_source_rgb(r / 255.0, g / 255.0, b / 255.0);
     let _ = cr.fill();
-}
-
-/// Append a quadratic bezier from the current point to `(ex, ey)` with control
-/// point `(cx, cy)`, via the exact cubic equivalent (control points
-/// `(s+2c)/3` and `(2c+e)/3`).
-fn quad_to(cr: &gtk4::cairo::Context, sx: f64, sy: f64, cx: f64, cy: f64, ex: f64, ey: f64) {
-    cr.curve_to(
-        (sx + 2.0 * cx) / 3.0,
-        (sy + 2.0 * cy) / 3.0,
-        (2.0 * cx + ex) / 3.0,
-        (2.0 * cy + ey) / 3.0,
-        ex,
-        ey,
-    );
 }
 
 fn truncate(s: &str, n: usize) -> String {

@@ -84,7 +84,7 @@ pub async fn run(tx: Sender<Event>) -> zbus::Result<MediaHandle> {
         let conn2 = conn.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_millis(1500)).await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
                 let mut active = None;
                 let _ = scan_and_emit(&conn2, &mut active, &tx).await;
             }
@@ -97,7 +97,7 @@ pub async fn run(tx: Sender<Event>) -> zbus::Result<MediaHandle> {
         let conn = conn.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_millis(400)).await;
+                tokio::time::sleep(Duration::from_millis(900)).await;
                 let names = list_player_names(&conn).await;
                 let mut active_bus = None;
                 for n in &names {

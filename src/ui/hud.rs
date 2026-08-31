@@ -99,10 +99,10 @@ impl HudManager {
         let Some(app) = self.app.upgrade() else {
             return;
         };
-        // cap concurrent banners
+        // cap concurrent banners — destroy oldest to free layer-shell surface
         while self.banners.len() >= 3 {
             if let Some(old) = self.banners.first() {
-                old.set_visible(false);
+                old.close();
             }
             self.banners.remove(0);
         }
@@ -112,8 +112,8 @@ impl HudManager {
         motion::tween(&win, 220, move |t| w_in.set_opacity(t), || {});
         self.banners.push(win);
         self.reflow();
-        // auto-dismiss non-critical
-        if b.urgency != 2 && b.id != u32::MAX - 1 || true {
+        // auto-dismiss non-critical (critical stays until dismissed)
+        if b.urgency != 2 && b.id != u32::MAX - 1 {
             let wref = self.banners.last().map(|w| w.downgrade());
             let cmd_tx = shared.notif_cmd.borrow().clone();
             let id = b.id;
@@ -146,6 +146,7 @@ impl HudManager {
 
     fn reflow(&mut self) {
         use gtk4_layer_shell::{Edge, LayerShell};
+        // drop closed/hidden banners and free their surfaces
         self.banners.retain(|w| w.is_visible());
         for (i, w) in self.banners.iter().enumerate() {
             w.set_margin(Edge::Top, 52 + (i as i32 * 78));

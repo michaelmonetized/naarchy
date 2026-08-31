@@ -199,91 +199,69 @@ impl MediaPage {
 
     pub fn update(&self) {
         super::with_shared(|sh| {
-            let st = sh.media.borrow().clone();
-            match st {
-                Some(st) => {
-                    self.player_lbl.set_text(&st.player.to_uppercase());
-                    self.title.set_text(if st.title.is_empty() {
-                        "Untitled"
+            let st_opt = sh.media.borrow();
+            if let Some(st) = st_opt.as_ref() {
+                self.player_lbl.set_text(&st.player.to_uppercase());
+                self.title.set_text(if st.title.is_empty() {
+                    "Untitled"
+                } else {
+                    &st.title
+                });
+                self.artist.set_text(&format!(
+                    "{}{}",
+                    st.artist,
+                    if st.album.is_empty() {
+                        String::new()
                     } else {
-                        &st.title
-                    });
-                    self.artist.set_text(&format!(
-                        "{}{}",
-                        st.artist,
-                        if st.album.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" — {}", st.album)
-                        }
-                    ));
-                    self.set_play_glyph(st.playing);
-                    self.play_btn.set_sensitive(true);
-                    self.next_btn.set_sensitive(st.can_next);
-                    self.prev_btn.set_sensitive(st.can_prev);
-                    self.seek.set_sensitive(st.can_seek && st.length_us > 0);
-                    if st.shuffle {
-                        self.shuffle_btn.add_css_class("active");
-                    } else {
-                        self.shuffle_btn.remove_css_class("active");
+                        format!(" — {}", st.album)
                     }
-                    self.repeat_btn.remove_css_class("rep-off");
-                    self.repeat_btn.remove_css_class("rep-track");
-                    self.repeat_btn.remove_css_class("rep-all");
-                    self.repeat_btn.add_css_class(match st.repeat {
-                        1 => "rep-track",
-                        2 => "rep-all",
-                        _ => "rep-off",
-                    });
+                ));
+                self.set_play_glyph(st.playing);
+                self.play_btn.set_sensitive(true);
+                self.next_btn.set_sensitive(st.can_next);
+                self.prev_btn.set_sensitive(st.can_prev);
+                self.seek.set_sensitive(st.can_seek && st.length_us > 0);
+                if st.shuffle {
+                    self.shuffle_btn.add_css_class("active");
+                } else {
+                    self.shuffle_btn.remove_css_class("active");
+                }
+                self.repeat_btn.remove_css_class("rep-off");
+                self.repeat_btn.remove_css_class("rep-track");
+                self.repeat_btn.remove_css_class("rep-all");
+                self.repeat_btn.add_css_class(match st.repeat {
+                    1 => "rep-track",
+                    2 => "rep-all",
+                    _ => "rep-off",
+                });
 
-                    let len_s = (st.length_us / 1_000_000).max(0) as f64;
-                    let pos_s = (st.position_us / 1_000_000).max(0) as f64;
-                    if len_s > 0.0 {
-                        self.seek.set_range(0.0, len_s);
-                        if !self.dragging.get() {
-                            self.seek.set_value(pos_s.min(len_s));
-                        }
+                let len_s = (st.length_us / 1_000_000).max(0) as f64;
+                let pos_s = (st.position_us / 1_000_000).max(0) as f64;
+                if len_s > 0.0 {
+                    self.seek.set_range(0.0, len_s);
+                    if !self.dragging.get() {
+                        self.seek.set_value(pos_s.min(len_s));
                     }
-                    self.time_len.set_text(&fmt_time(len_s as u64));
-                    self.time_cur.set_text(&fmt_time(pos_s as u64));
+                }
+                self.time_len.set_text(&fmt_time(len_s as u64));
+                self.time_cur.set_text(&fmt_time(pos_s as u64));
 
-                    if let Some(path) = st.art_path.clone() {
-                        if self.last_art.borrow().as_deref() != Some(path.as_str()) {
-                            *self.last_art.borrow_mut() = Some(path.clone());
-                            while let Some(c) = self.art_holder.first_child() {
-                                self.art_holder.remove(&c);
-                            }
-                            if let Ok(tex) =
-                                gdk::Texture::from_filename(std::path::Path::new(&path))
-                            {
-                                let pic = Picture::for_paintable(&tex);
-                                pic.set_size_request(88, 88);
-                                pic.set_content_fit(gtk4::ContentFit::Cover);
-                                self.art_holder.append(&pic);
-                            }
-                        }
-                    } else if self.last_art.borrow().is_some()
-                        || self.art_holder.first_child().is_some()
-                    {
-                        *self.last_art.borrow_mut() = None;
+                if let Some(path) = st.art_path.clone() {
+                    if self.last_art.borrow().as_deref() != Some(path.as_str()) {
+                        *self.last_art.borrow_mut() = Some(path.clone());
                         while let Some(c) = self.art_holder.first_child() {
                             self.art_holder.remove(&c);
                         }
-                        self.art_holder
-                            .append(&label(&["na-glyph", "lg", "na-dim"], g::MUSIC));
+                        if let Ok(tex) = gdk::Texture::from_filename(std::path::Path::new(&path)) {
+                            let pic = Picture::for_paintable(&tex);
+                            pic.set_size_request(88, 88);
+                            pic.set_content_fit(gtk4::ContentFit::Cover);
+                            self.art_holder.append(&pic);
+                        }
                     }
-                }
-                None => {
-                    self.player_lbl.set_text("NOTHING PLAYING");
-                    self.title.set_text("");
-                    self.artist.set_text("");
-                    self.set_play_glyph(false);
-                    self.play_btn.set_sensitive(false);
-                    self.next_btn.set_sensitive(false);
-                    self.prev_btn.set_sensitive(false);
-                    self.seek.set_sensitive(false);
-                    self.seek.set_range(0.0, 100.0);
-                    self.seek.set_value(0.0);
+                } else if self.last_art.borrow().is_some()
+                    || self.art_holder.first_child().is_some()
+                {
                     *self.last_art.borrow_mut() = None;
                     while let Some(c) = self.art_holder.first_child() {
                         self.art_holder.remove(&c);
@@ -291,6 +269,23 @@ impl MediaPage {
                     self.art_holder
                         .append(&label(&["na-glyph", "lg", "na-dim"], g::MUSIC));
                 }
+            } else {
+                self.player_lbl.set_text("NOTHING PLAYING");
+                self.title.set_text("");
+                self.artist.set_text("");
+                self.set_play_glyph(false);
+                self.play_btn.set_sensitive(false);
+                self.next_btn.set_sensitive(false);
+                self.prev_btn.set_sensitive(false);
+                self.seek.set_sensitive(false);
+                self.seek.set_range(0.0, 100.0);
+                self.seek.set_value(0.0);
+                *self.last_art.borrow_mut() = None;
+                while let Some(c) = self.art_holder.first_child() {
+                    self.art_holder.remove(&c);
+                }
+                self.art_holder
+                    .append(&label(&["na-glyph", "lg", "na-dim"], g::MUSIC));
             }
         });
     }

@@ -29,6 +29,7 @@ pub struct PanelUi {
     clip_page: Rc<ClipPage>,
     drawer_page: Rc<DrawerPage>,
     cal_page: Rc<CalendarPage>,
+    drop_revealer: gtk4::Revealer,
 }
 
 impl PanelUi {
@@ -37,10 +38,12 @@ impl PanelUi {
         shared: &Rc<Shared>,
         monitor: Option<&gdk::Monitor>,
     ) -> Self {
-        let (w, h) = {
+        let (content_w, h) = {
             let c = shared.cfg.borrow();
             (c.appearance.panel_width, c.appearance.panel_height)
         };
+        // Bloom is 75% wider than the content card; extra width is veil only.
+        let w = ((content_w as f64) * super::liquid::PANEL_WINDOW_SCALE).round() as i32;
 
         let win = ApplicationWindow::builder()
             .application(app)
@@ -67,7 +70,7 @@ impl PanelUi {
             let progress = progress.clone();
             bg.set_draw_func(move |_da, cr, w, h| {
                 let (fill, alpha) = super::with_shared(|sh| {
-                    let pal = crate::theme::resolve(&sh.cfg.borrow(), sh.dark.get());
+                    let pal = sh.palette();
                     let fill = crate::theme::hex_triple(&pal.bg).unwrap_or((10, 10, 15));
                     let alpha = sh.cfg.borrow().appearance.opacity;
                     (fill, alpha)
@@ -79,10 +82,13 @@ impl PanelUi {
         }
 
         let content = vbox(0);
-        content.set_margin_top(76);
+        content.set_margin_top((super::liquid::NOTCH_H as i32) + 10);
         content.set_margin_start(28);
         content.set_margin_end(28);
         content.set_margin_bottom(8);
+        content.set_hexpand(false);
+        content.set_halign(gtk4::Align::Center);
+        content.set_width_request(content_w);
         content.set_vexpand(true);
         content.set_opacity(0.0);
 
@@ -189,11 +195,20 @@ impl PanelUi {
             content.append(&outer_sc);
         }
 
-        let dock_wrap = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        let dock_wrap = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
         dock_wrap.set_halign(gtk4::Align::Center);
         dock_wrap.set_margin_bottom(14);
         dock_wrap.set_margin_top(4);
         dock_wrap.append(&dock);
+        // Settings — opens ~/.config/naarchy/config.toml in nvim via omarchy-launch-config-editor
+        {
+            let settings = crate::ui::glyph_btn(&["na-dock-btn", "na-settings-btn"], g::SETTINGS);
+            settings.set_tooltip_text(Some("Settings — Edit config in Neovim"));
+            settings.connect_clicked(|_| {
+                crate::util::open_config_in_editor();
+            });
+            dock_wrap.append(&settings);
+        }
 
         let shell = vbox(0);
         shell.set_hexpand(true);
@@ -201,10 +216,31 @@ impl PanelUi {
         shell.append(&content);
         shell.append(&dock_wrap);
 
+        let drop_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        drop_box.set_css_classes(&["na-drop-veil"]);
+        drop_box.set_hexpand(true);
+        drop_box.set_vexpand(true);
+        let drop_revealer = gtk4::Revealer::new();
+        drop_revealer.set_transition_type(gtk4::RevealerTransitionType::Crossfade);
+        drop_revealer.set_transition_duration(180);
+        drop_revealer.set_reveal_child(false);
+        drop_revealer.set_can_target(false);
+        drop_revealer.set_hexpand(true);
+        drop_revealer.set_vexpand(true);
+        drop_revealer.set_halign(gtk4::Align::Center);
+        drop_revealer.set_width_request(content_w);
+        drop_revealer.set_margin_top(super::liquid::NOTCH_H as i32 + 8);
+        drop_revealer.set_margin_bottom(DOCK_RESERVE as i32);
+        drop_revealer.set_margin_start(24);
+        drop_revealer.set_margin_end(24);
+        drop_revealer.set_child(Some(&drop_box));
+
         let overlay = gtk4::Overlay::new();
         overlay.set_child(Some(&bg));
         overlay.add_overlay(&shell);
+        overlay.add_overlay(&drop_revealer);
         win.set_child(Some(&overlay));
+        attach_file_drop(&win);
 
         {
             let key = gtk4::EventControllerKey::new();
@@ -222,50 +258,13 @@ impl PanelUi {
         let pointer_flag = Rc::new(Cell::new(false));
         {
             let motion = gtk4::EventControllerMotion::new();
-            let enter_flag = pointer_flag.clone();
-            motion.connect_enter(move |_m, _x, _y| enter_flag.set(true));
-            {
-                let leave_flag = pointer_flag.clone();
-                motion.connect_leave(move |_m| leave_flag.set(false));
-            }
-            shell.add_controller(motion);
-        }
-
-        {
-            let formats = gdk::ContentFormats::builder()
-                .add_type(gdk::Texture::static_type())
-                .add_mime_type("text/uri-list")
-                .add_mime_type("text/plain;charset=utf-8")
-                .add_mime_type("text/plain")
-                .add_mime_type("image/png")
-                .build();
-            let dt = DropTarget::builder()
-                .formats(&formats)
-                .actions(gdk::DragAction::COPY)
-                .build();
-            let sh = shared.clone();
-            let content2 = content.clone();
-            dt.connect_enter(move |_dt, _x, _y| {
-                sh.expand_now_for_shelf();
-                content2.add_css_class("na-shelf-drop");
-                gdk::DragAction::COPY
+            motion.connect_enter(move |_m, _x, _y| {
+                crate::app::surface_pointer_enter();
             });
-            {
-                let content3 = content.clone();
-                dt.connect_leave(move |_dt| {
-                    content3.remove_css_class("na-shelf-drop");
-                });
-            }
-            {
-                let sh2 = shared.clone();
-                let content3 = content.clone();
-                dt.connect_drop(move |_dt, value, _x, _y| {
-                    content3.remove_css_class("na-shelf-drop");
-                    handle_dropped_value(&sh2, value);
-                    true
-                });
-            }
-            content.add_controller(dt);
+            motion.connect_leave(move |_m| {
+                crate::app::surface_pointer_leave();
+            });
+            win.add_controller(motion);
         }
 
         let p = Self {
@@ -286,6 +285,7 @@ impl PanelUi {
             clip_page,
             drawer_page,
             cal_page,
+            drop_revealer,
         };
         p.shelf_page.reload();
         p.clip_page.reload(None);
@@ -320,6 +320,17 @@ impl PanelUi {
 
     pub fn poke_collapse_timer(&self) {
         self.cancel_collapse_timer();
+    }
+
+    pub fn note_pointer(&self, on: bool) {
+        self.pointer_flag.set(on);
+        if on {
+            self.cancel_collapse_timer();
+        }
+    }
+
+    pub fn set_drop_veil(&self, on: bool) {
+        self.drop_revealer.set_reveal_child(on);
     }
 
     pub fn schedule_collapse_if_unhovered(&self) {
@@ -358,6 +369,7 @@ impl PanelUi {
         let dock = self.dock.clone();
         let win = self.win.clone();
         let tick = self.tick.clone();
+        let frame = Rc::new(Cell::new(0u32));
         motion::drive(&tick, &bg_tick, move |dt| {
             let tgt = target.get();
             let spring = if tgt > 0.5 {
@@ -374,15 +386,21 @@ impl PanelUi {
             dock.set_opacity(d_op);
             dock.set_margin_bottom(motion::lerp(-8.0, 0.0, d_op) as i32);
 
-            let ww = win.width().max(1) as f64;
-            let wh = win.height().max(1) as f64;
-            let cap = liquid::geom(ww, wh, p, DOCK_RESERVE);
-            let dock_hit = if d_op > 0.05 {
-                liquid::widget_rect_in(&win, &dock)
-            } else {
-                None
-            };
-            liquid::apply_input_region(&win, cap, dock_hit);
+            // throttle input region updates to ~20Hz to avoid per-frame layout + Wayland round-trip
+            let f = frame.get().wrapping_add(1);
+            frame.set(f);
+            let should_update_region = f % 3 == 0 || spring.settled(p, v, tgt);
+            if should_update_region {
+                let ww = win.width().max(1) as f64;
+                let wh = win.height().max(1) as f64;
+                let cap = liquid::geom(ww, wh, p, DOCK_RESERVE);
+                let dock_hit = if d_op > 0.05 {
+                    liquid::widget_rect_in(&win, &dock)
+                } else {
+                    None
+                };
+                liquid::apply_input_region(&win, cap, dock_hit);
+            }
 
             if spring.settled(p, v, tgt) {
                 progress.set(tgt);
@@ -395,6 +413,8 @@ impl PanelUi {
                     win.set_visible(false);
                     super::with_shared(|sh| sh.expanded.set(false));
                 } else {
+                    let ww = win.width().max(1) as f64;
+                    let wh = win.height().max(1) as f64;
                     let cap = liquid::geom(ww, wh, 1.0, DOCK_RESERVE);
                     liquid::apply_input_region(&win, cap, liquid::widget_rect_in(&win, &dock));
                 }
@@ -450,11 +470,34 @@ fn tab_name(t: Tab) -> &'static str {
     }
 }
 
-impl Shared {
-    pub fn expand_now_for_shelf(self: &Rc<Self>) {
-        self.tab.set(Tab::Inbox);
-        crate::app::request_expand_all();
-    }
+fn file_drop_formats() -> gdk::ContentFormats {
+    gdk::ContentFormats::builder()
+        .add_type(gdk::Texture::static_type())
+        .add_mime_type("text/uri-list")
+        .add_mime_type("text/plain;charset=utf-8")
+        .add_mime_type("text/plain")
+        .add_mime_type("image/png")
+        .build()
+}
+
+/// File drops on the notch or any tab land in the Inbox.
+pub(crate) fn attach_file_drop(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
+    let dt = DropTarget::builder()
+        .formats(&file_drop_formats())
+        .actions(gdk::DragAction::COPY)
+        .build();
+    dt.connect_enter(move |_dt, _x, _y| {
+        crate::app::drop_hover(true);
+        gdk::DragAction::COPY
+    });
+    dt.connect_leave(move |_dt| {
+        crate::app::drop_hover(false);
+    });
+    dt.connect_drop(move |_dt, value, _x, _y| {
+        crate::app::drop_commit(value);
+        true
+    });
+    widget.add_controller(dt);
 }
 
 /// Interpret a dropped GDK Value and store it on the shelf.
@@ -494,6 +537,7 @@ pub(crate) enum PayloadKind {
 
 pub(crate) fn parse_payload(s: &str) -> Vec<PayloadKind> {
     let mut out = Vec::new();
+    let single_line = s.lines().count() == 1;
     for line in s.split('\n') {
         let l = line.trim_end_matches('\r').trim();
         if l.is_empty() {
@@ -504,7 +548,7 @@ pub(crate) fn parse_payload(s: &str) -> Vec<PayloadKind> {
             out.push(PayloadKind::File(path));
         } else if l.starts_with('/') {
             out.push(PayloadKind::File(l.to_string()));
-        } else if looks_like_url(l) || s.lines().count() == 1 {
+        } else if looks_like_url(l) || single_line {
             out.push(PayloadKind::Text(l.to_string()));
         }
     }

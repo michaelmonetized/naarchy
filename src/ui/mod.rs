@@ -34,6 +34,7 @@ pub mod g {
     pub const IMAGE: &str = "\u{f03e}";
     pub const FILE: &str = "\u{f15b}";
     pub const TEXT: &str = "\u{f0f6}";
+    pub const SETTINGS: &str = "\u{f013}";
 }
 
 use crate::clip_store::ClipStore;
@@ -153,13 +154,17 @@ pub struct Shared {
     pub ui_tx: RefCell<Option<Sender<crate::services::Event>>>,
     /// App-level "expand all panels" closure, set once by app::run
     pub expand_all_cb: RefCell<Option<Box<dyn Fn()>>>,
+    /// Cached palette to avoid per-frame omarchy file I/O (see theme::resolve)
+    cached_palette: RefCell<crate::theme::Palette>,
 }
 
 impl Shared {
     pub fn new(cfg: Config) -> Rc<Self> {
+        let dark = true;
+        let palette = crate::theme::resolve(&cfg, dark);
         Rc::new(Self {
             cfg: RefCell::new(cfg),
-            dark: Cell::new(true),
+            dark: Cell::new(dark),
             expanded: Cell::new(false),
             pinned: Cell::new(false),
             fullscreen_hide: Cell::new(false),
@@ -176,10 +181,17 @@ impl Shared {
             notif_cmd: RefCell::new(None),
             ui_tx: RefCell::new(None),
             expand_all_cb: RefCell::new(None),
+            cached_palette: RefCell::new(palette),
         })
     }
 
     pub fn restyle(&self) {
+        // refresh cached palette first so draw funcs use fresh colors without file I/O
+        {
+            let cfg = self.cfg.borrow();
+            let pal = crate::theme::resolve(&cfg, self.dark.get());
+            *self.cached_palette.borrow_mut() = pal;
+        }
         let cfg = self.cfg.borrow();
         let css = crate::theme::build_css(&cfg, self.dark.get());
         let provider = gtk4::CssProvider::new();
@@ -191,6 +203,14 @@ impl Shared {
                 gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
         }
+    }
+
+    pub fn palette(&self) -> crate::theme::Palette {
+        self.cached_palette.borrow().clone()
+    }
+
+    pub fn accent_rgb(&self) -> (u8, u8, u8) {
+        self.cached_palette.borrow().accent_rgb
     }
 }
 

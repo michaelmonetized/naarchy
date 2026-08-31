@@ -1,6 +1,7 @@
 //! Tiny system-chime for timer completion: writes a short two-tone WAV to the
 //! cache once, then plays it with whatever player is installed.
 
+use gtk4::prelude::DisplayExt as _;
 use std::path::PathBuf;
 
 fn path() -> PathBuf {
@@ -59,15 +60,32 @@ fn ensure_wav() -> PathBuf {
 pub fn play() {
     let p = ensure_wav();
     let p_str = p.to_string_lossy().into_owned();
-    for player in ["pw-play", "paplay", "aplay", "ffplay"] {
+    for player in ["pw-play", "paplay", "aplay", "ffplay", "canberra-gtk-play"] {
         let mut cmd = std::process::Command::new(player);
         if player == "ffplay" {
-            cmd.arg("-nodisp").arg("-autoexit");
+            cmd.arg("-nodisp").arg("-autoexit").arg(&p_str);
+        } else if player == "canberra-gtk-play" {
+            // fallback to freedesktop sound theme
+            cmd.arg("-f").arg(&p_str);
+        } else {
+            cmd.arg(&p_str);
         }
-        if cmd.arg(&p_str).spawn().is_ok() {
+        if cmd.spawn().is_ok() {
             return;
         }
     }
+    // ultimate fallback: terminal bell
+    system_bell();
+}
+
+/// Also emit a terminal/visual bell (\x07) and try `beep` / `notify`.
+pub fn system_bell() {
+    // GDK beep (if display available) + stdout bell
+    if let Some(display) = gtk4::gdk::Display::default() {
+        display.beep();
+    }
+    eprint!("\x07");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
 }
 
 #[cfg(test)]

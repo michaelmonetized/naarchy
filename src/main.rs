@@ -392,8 +392,17 @@ fn start_daemon() {
         let tx = event_tx.clone();
         let hover_open = cfg.behavior.hover_open;
         let hover_ms = cfg.behavior.hover_ms;
-        let band = cfg.behavior.hover_band_px;
-        services::hyprland::spawn(tx, band, hover_ms, hover_open);
+        let zone = services::hyprland::HoverZone {
+            band_px: cfg.behavior.hover_band_px as f64,
+            pill_w: cfg
+                .appearance
+                .pill_width_island
+                .max(ui::liquid::NOTCH_W as i32) as f64,
+            pill_h: ui::liquid::NOTCH_H,
+            panel_w: cfg.appearance.panel_width as f64 * ui::liquid::PANEL_WINDOW_SCALE,
+            panel_h: cfg.appearance.panel_height as f64,
+        };
+        services::hyprland::spawn(tx, zone, hover_ms, hover_open);
     }
 
     // Config hot-reload → forwarded as events

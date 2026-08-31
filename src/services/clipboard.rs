@@ -46,7 +46,7 @@ pub fn spawn(tx: Sender<Event>) -> std::thread::JoinHandle<()> {
         }
 
         loop {
-            std::thread::sleep(Duration::from_millis(600));
+            std::thread::sleep(Duration::from_millis(900));
             let Some(clip) = read_current() else { continue };
             let hv = hash_clip(&clip);
             if hv != last_hash {

@@ -3,13 +3,13 @@ use crate::config::Config;
 /// Everything visual derived (once) from config + the active omarchy theme.
 /// Cached values feed both the CSS and the cairo-drawn layers (pill capsule,
 /// shelf gradient) so colors and font live in one place.
+#[derive(Clone, Debug)]
 pub struct Palette {
     // hex strings, e.g. "#89b4fa"
     pub accent: String,
     pub bg: String,
     pub bg2: String,
     pub fg: String,
-    pub pill_fill: String,
     pub icon_font: String,
     // rgb components of accent for glow math
     pub accent_rgb: (u8, u8, u8),
@@ -79,14 +79,6 @@ pub fn resolve(cfg: &Config, dark: bool) -> Palette {
         "#17171c",
         theme_dark,
     );
-    // The notch capsule fill: needs to read as a dark island against the
-    // shelf/panel behind it, so use the theme's *dark_background* (not its
-    // regular background, which would vanish against the panel).
-    let pill_fill = a
-        .pill_bg
-        .clone()
-        .or_else(|| om.as_ref().map(|p| p.dark_background.clone()))
-        .unwrap_or_else(|| "#0a0a0f".into());
     let icon_font = a
         .icon_font
         .clone()
@@ -100,13 +92,13 @@ pub fn resolve(cfg: &Config, dark: bool) -> Palette {
         bg,
         bg2,
         fg,
-        pill_fill,
         icon_font,
         accent_rgb,
     }
 }
 
 /// Convenience for cairo callers that only need the accent.
+#[allow(dead_code)]
 pub fn accent_hex(cfg: &Config) -> String {
     let a = &cfg.appearance;
     if let Some(v) = &a.accent {
@@ -230,8 +222,6 @@ window.naarchy picture {{
 .na-dock-btn {{
   min-width: 38px;
   min-height: 38px;
-  max-width: 38px;
-  max-height: 38px;
   padding: 0;
   border-radius: 999px;
   color: {fg};
@@ -257,6 +247,12 @@ window.naarchy picture {{
   border: 1.5px dashed {accent};
   border-radius: 28px;
   background-color: rgba({accent_rgb},0.07);
+}}
+window.naarchy box.na-drop-veil {{
+  background-color: rgba({accent_rgb}, 0.08);
+  border: 2px dashed {accent};
+  border-radius: 32px;
+  box-shadow: none;
 }}
 
 .na-widget {{
@@ -494,9 +490,48 @@ window.naarchy picture {{
   font-weight: 600;
   background-color: {glass};
   color: {fg};
-  transition: background-color 160ms {ease}, transform 160ms {ease};
+  border: 1px solid transparent;
+  transition: background-color 160ms {ease}, transform 160ms {ease}, border-color 160ms {ease};
 }}
-.na-preset:hover {{ background-color: {glass_3}; transform: scale(1.05); }}
+.na-preset:hover {{ background-color: {glass_3}; transform: scale(1.05); border-color: rgba({accent_rgb},0.35); }}
+
+.na-timer-big.na-timer-done {{
+  color: {accent};
+  animation: na-bell-pulse 900ms {ease} infinite alternate;
+}}
+.na-timer-bell {{
+  font-size: 28px;
+  animation: na-bell-shake 700ms {ease} infinite;
+}}
+.na-timer-bell-text {{
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: {accent};
+}}
+.na-timer-status {{
+  font-weight: 700;
+}}
+.na-timer-entry {{
+  min-width: 96px;
+}}
+@keyframes na-bell-shake {{
+  0% {{ transform: rotate(-8deg); }}
+  50% {{ transform: rotate(8deg); }}
+  100% {{ transform: rotate(-8deg); }}
+}}
+@keyframes na-bell-pulse {{
+  0% {{ opacity: 0.92; transform: scale(1.0); }}
+  100% {{ opacity: 1.0; transform: scale(1.03); }}
+}}
+
+.na-settings-btn {{
+  opacity: 0.88;
+}}
+.na-settings-btn:hover {{
+  opacity: 1.0;
+  background-color: {glass_2};
+}}
 
 .na-hud {{
   background-color: rgba(8,8,12,0.82);

@@ -50,6 +50,67 @@ pub fn poke_panels() {
     });
 }
 
+pub fn surface_pointer_enter() {
+    with_app(|app| {
+        for p in app.panels.borrow().iter() {
+            p.note_pointer(true);
+        }
+    });
+}
+
+pub fn surface_pointer_leave() {
+    with_app(|app| {
+        for p in app.panels.borrow().iter() {
+            p.note_pointer(false);
+            p.schedule_collapse_if_unhovered();
+        }
+    });
+}
+
+thread_local! {
+    static IGNORE_DROP_LEAVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Dragging a file over the notch or any tab: open, fade in the drop target.
+pub fn drop_hover(on: bool) {
+    with_app(|app| {
+        if on {
+            IGNORE_DROP_LEAVE.with(|c| c.set(false));
+            if !app.shared.fullscreen_hide.get() {
+                for p in app.panels.borrow().iter() {
+                    p.expand();
+                    p.note_pointer(true);
+                    p.set_drop_veil(true);
+                }
+            }
+        } else if IGNORE_DROP_LEAVE.with(|c| c.replace(false)) {
+            for p in app.panels.borrow().iter() {
+                p.set_drop_veil(false);
+            }
+        } else {
+            for p in app.panels.borrow().iter() {
+                p.set_drop_veil(false);
+                p.note_pointer(false);
+                p.schedule_collapse_if_unhovered();
+            }
+        }
+    });
+}
+
+/// Drop completed: park in the Inbox and show it.
+pub fn drop_commit(value: &gtk4::glib::Value) {
+    with_app(|app| {
+        IGNORE_DROP_LEAVE.with(|c| c.set(true));
+        crate::ui::panel::handle_dropped_value(&app.shared, value);
+        app.shared.tab.set(crate::ui::Tab::Inbox);
+        for p in app.panels.borrow().iter() {
+            p.show_tab(crate::ui::Tab::Inbox);
+            p.set_drop_veil(false);
+            p.note_pointer(true);
+        }
+    });
+}
+
 pub fn refresh_after_shelf_change() {
     with_app(|app| {
         for p in app.panels.borrow().iter() {
@@ -148,24 +209,33 @@ pub fn run(
     // Build surfaces per monitor
     build_surfaces(&a, app);
 
-    // Event pump — uses DEFAULT_IDLE (200) so the first frame commit happens before
-    // this fires.  Priority::DEFAULT (0) pre-empts gtk4-layer-shell's initial
-    // surface configure and leaves the pill stuck at 0×0.
+    // Event pump — drain mpsc channels on a short timeout rather than a
+    // busy `idle` source. `DEFAULT_IDLE` busy-loops while the queue is empty
+    // and kept the CPU awake 1000s/sec even when idle.
     {
         let a2 = a.clone();
-        glib::source::idle_add_local_full(glib::source::Priority::DEFAULT_IDLE, move || {
-            for _ in 0..24 {
+        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+            let mut did_work = false;
+            for _ in 0..12 {
                 match events_rx.try_recv() {
-                    Ok(ev) => handle_event(&a2, ev),
+                    Ok(ev) => {
+                        handle_event(&a2, ev);
+                        did_work = true;
+                    }
                     Err(_) => break,
                 }
             }
             for _ in 0..8 {
                 match verb_rx.try_recv() {
-                    Ok(v) => handle_verb(&a2, v),
+                    Ok(v) => {
+                        handle_verb(&a2, v);
+                        did_work = true;
+                    }
                     Err(_) => break,
                 }
             }
+            // keep polling; timeout guarantees ~60Hz max, not busy-loop
+            let _ = did_work;
             glib::ControlFlow::Continue
         });
     }

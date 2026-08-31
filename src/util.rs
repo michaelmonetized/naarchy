@@ -70,6 +70,41 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Open the naarchy config in the user's editor via Omarchy's launcher,
+/// mirroring every other Omarchy plugin (`omarchy-launch-config-editor` →
+/// `omarchy-launch-editor` → `nvim` in `omarchy-launch-tui`).
+pub fn open_config_in_editor() {
+    let cfg = config_file();
+    // ensure parent dir exists so the editor doesn't fail on missing path
+    if let Some(parent) = cfg.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // create empty file if missing so editor has something to open
+    if !cfg.exists() {
+        let _ = std::fs::write(&cfg, "");
+    }
+    let path = cfg.to_string_lossy().to_string();
+    // Preferred: omarchy-launch-config-editor (sends low-urgency notification then editor)
+    // Fallback: omarchy-launch-editor, then direct `xdg-terminal-exec -e nvim`
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "if command -v omarchy-launch-config-editor >/dev/null 2>&1; then \
+                 exec omarchy-launch-config-editor {} >/dev/null 2>&1 & \
+             elif command -v omarchy-launch-editor >/dev/null 2>&1; then \
+                 exec omarchy-launch-editor {} >/dev/null 2>&1 & \
+             else \
+                 exec xdg-terminal-exec -e nvim {} >/dev/null 2>&1 & \
+             fi",
+            shell_quote(&path),
+            shell_quote(&path),
+            shell_quote(&path)
+        ))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 pub fn human_size(bytes: usize) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;
@@ -86,8 +121,17 @@ pub fn human_size(bytes: usize) -> String {
 }
 
 pub fn cache_key(data: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data.hash(&mut h);
-    format!("{:016x}", h.finish())
+    // Stable FNV-1a 64 — DefaultHasher is SipHash with random key per process
+    // so art/shelf/clip cache filenames would churn every restart.
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut h = FNV_OFFSET;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    // mix length to avoid prefix collisions
+    h ^= data.len() as u64;
+    h = h.wrapping_mul(FNV_PRIME);
+    format!("{h:016x}")
 }
