@@ -375,7 +375,26 @@ fn handle_event(app: &Rc<App>, ev: Event) {
             }
         }
         Event::CalendarReload => {
-            *app.shared.cal_events.borrow_mut() = services::calendar::today_from_cache();
+            let events = services::calendar::today_from_cache();
+            *app.shared.cal_events.borrow_mut() = events.clone();
+            for p in app.panels.borrow().iter() {
+                p.cal_reload();
+            }
+            // async travel-time enrichment for physical addresses (driving + leave time)
+            if events.iter().any(|e| e.directions_url.is_some()) {
+                if let Some(tx) = app.shared.ui_tx.borrow().clone() {
+                    let evs = events.clone();
+                    std::thread::spawn(move || {
+                        let enriched = services::calendar::enrich_with_travel(evs);
+                        if enriched.iter().any(|e| e.leave_label.is_some()) {
+                            let _ = tx.send(Event::CalendarEnriched(enriched));
+                        }
+                    });
+                }
+            }
+        }
+        Event::CalendarEnriched(enriched) => {
+            *app.shared.cal_events.borrow_mut() = enriched;
             for p in app.panels.borrow().iter() {
                 p.cal_reload();
             }

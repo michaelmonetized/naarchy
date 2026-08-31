@@ -18,6 +18,14 @@ pub struct CalEvent {
     pub time_str: String,
     /// Approx. absolute start (epoch) for ordering + "next" detection.
     pub start_epoch: u64,
+    /// Virtual meeting join URL (Meet/Zoom/Teams) extracted from DESCRIPTION/LOCATION/URL
+    pub join_url: Option<String>,
+    /// Human label for join_url: "Meet" | "Zoom" | "Teams"
+    pub join_kind: Option<String>,
+    /// Driving directions URL for physical addresses (Google Maps)
+    pub directions_url: Option<String>,
+    /// "Leave 09:23 (18 min)" computed from current location — filled async
+    pub leave_label: Option<String>,
 }
 
 fn cache_dir() -> PathBuf {
@@ -106,6 +114,28 @@ pub fn today_from_cache() -> Vec<CalEvent> {
     out
 }
 
+/// Enrich physical-location events with "Leave HH:MM (N min)" via current location.
+/// Blocking — call from a background thread. Uses IP geolocation fallback if portal denied.
+pub fn enrich_with_travel(mut events: Vec<CalEvent>) -> Vec<CalEvent> {
+    let Some(cur) = crate::services::location::current_coords() else {
+        return events;
+    };
+    for ev in events.iter_mut() {
+        if ev.directions_url.is_none() || ev.location.is_empty() {
+            continue;
+        }
+        // avoid hammering Nominatim/OSRM for far-future events (only today, already filtered)
+        if let Some(dest) = crate::services::location::geocode(&ev.location) {
+            if let Some(label) =
+                crate::services::location::leave_label_for(ev.start_epoch, cur, dest)
+            {
+                ev.leave_label = Some(label);
+            }
+        }
+    }
+    events
+}
+
 /// Parse an ICS calendar and keep only events on the local "today" (skipping
 /// birthdays / anniversaries — Google emits those with the BIRTHDAY category,
 /// iCloud titles them "...'s Birthday").
@@ -141,15 +171,26 @@ pub fn parse_ics(text: &str) -> Vec<CalEvent> {
                 continue;
             }
             let start = timefmt::days_from_civil(cy, cm, cd) * 86400 - timefmt::local_offset_secs();
+            let loc_raw = props
+                .get("LOCATION")
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            let (join_url, join_kind) = extract_join_url(&props);
+            let directions_url = if is_physical_address(&loc_raw) {
+                Some(directions_url_for(&loc_raw))
+            } else {
+                None
+            };
             events.push(CalEvent {
                 summary: summary.trim().to_string(),
-                location: props
-                    .get("LOCATION")
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default(),
+                location: loc_raw,
                 all_day: true,
                 time_str: "All day".into(),
                 start_epoch: start as u64,
+                join_url,
+                join_kind,
+                directions_url,
+                leave_label: None,
             });
             continue;
         }
@@ -170,15 +211,26 @@ pub fn parse_ics(text: &str) -> Vec<CalEvent> {
             // not upcoming anymore; skip
             continue;
         }
+        let loc_raw = props
+            .get("LOCATION")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let (join_url, join_kind) = extract_join_url(&props);
+        let directions_url = if is_physical_address(&loc_raw) {
+            Some(directions_url_for(&loc_raw))
+        } else {
+            None
+        };
         events.push(CalEvent {
             summary: summary.trim().to_string(),
-            location: props
-                .get("LOCATION")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default(),
+            location: loc_raw,
             all_day: false,
             time_str: format!("{:02}:{:02}", lh.min(23), lmn.min(59)),
             start_epoch: wall_start as u64,
+            join_url,
+            join_kind,
+            directions_url,
+            leave_label: None,
         });
     }
     events.sort_by_key(|e| e.start_epoch);
@@ -288,6 +340,139 @@ fn ics_props(block: &str) -> std::collections::HashMap<String, String> {
         }
     }
     props
+}
+
+fn extract_join_url(
+    props: &std::collections::HashMap<String, String>,
+) -> (Option<String>, Option<String>) {
+    // scan all prop values for a virtual meeting URL, prefer Meet > Zoom > Teams
+    let mut candidates: Vec<(String, String)> = Vec::new();
+    for v in props.values() {
+        for url in find_urls(v) {
+            if let Some(kind) = classify_join_url(&url) {
+                candidates.push((url, kind));
+            }
+        }
+    }
+    // also check raw block values that might be in X- props with different casing
+    if candidates.is_empty() {
+        return (None, None);
+    }
+    // prefer Meet, then Zoom, then Teams
+    let order = |k: &str| match k {
+        "Meet" => 0,
+        "Zoom" => 1,
+        "Teams" => 2,
+        _ => 3,
+    };
+    candidates.sort_by_key(|(_, k)| order(k));
+    let (url, kind) = candidates.into_iter().next().unwrap();
+    (Some(url), Some(kind))
+}
+
+fn find_urls(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let bytes = text.as_bytes();
+    while i < bytes.len() {
+        let rest = &text[i..];
+        let start = if let Some(p) = rest.find("https://") {
+            p
+        } else if let Some(p) = rest.find("http://") {
+            p
+        } else {
+            break;
+        };
+        let abs_start = i + start;
+        let mut end = abs_start;
+        while end < text.len() {
+            let c = text.as_bytes()[end] as char;
+            if c.is_whitespace()
+                || c == '"'
+                || c == '\''
+                || c == '>'
+                || c == '<'
+                || c == ')'
+                || c == ']'
+            {
+                break;
+            }
+            end += 1;
+        }
+        let mut url = text[abs_start..end].to_string();
+        // trim trailing punctuation like . , ;
+        while url.ends_with('.') || url.ends_with(',') || url.ends_with(';') || url.ends_with('!') {
+            url.pop();
+        }
+        if url.len() > 10 {
+            out.push(url);
+        }
+        i = end;
+    }
+    out
+}
+
+fn classify_join_url(url: &str) -> Option<String> {
+    let l = url.to_lowercase();
+    if l.contains("meet.google.com") {
+        Some("Meet".into())
+    } else if l.contains("zoom.us") || l.contains("zoom.com") {
+        Some("Zoom".into())
+    } else if l.contains("teams.microsoft.com")
+        || l.contains("teams.live.com")
+        || l.contains("teams.microsoft")
+    {
+        Some("Teams".into())
+    } else {
+        None
+    }
+}
+
+fn is_physical_address(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let lower = t.to_lowercase();
+    // if it looks like a URL, not physical
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return false;
+    }
+    if classify_join_url(t).is_some() {
+        return false;
+    }
+    // must not be all URL-like, and contain some address heuristics
+    // Google Calendar often puts address with commas and numbers
+    let has_digit = t.chars().any(|c| c.is_ascii_digit());
+    let has_comma = t.contains(',');
+    let has_letter = t.chars().any(|c| c.is_alphabetic());
+    let len_ok = t.len() > 8;
+    // if it has a comma and digit and letter, likely address; or long with comma
+    (has_digit && has_letter && len_ok) || (has_comma && len_ok && has_letter)
+}
+
+fn directions_url_for(address: &str) -> String {
+    // use Google Maps directions with destination; origin defaults to current location
+    let enc = encode_uri_component(address);
+    format!(
+        "https://www.google.com/maps/dir/?api=1&destination={}&travelmode=driving",
+        enc
+    )
+}
+
+fn encode_uri_component(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        let c = b as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+            out.push(c);
+        } else if c == ' ' {
+            out.push('+');
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 /// Returns (y, m, d, (h, m), is_utc, all_day).

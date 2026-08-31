@@ -4,7 +4,7 @@ use super::{g, glyph_btn, label, Shared};
 use crate::services::calendar::CalEvent;
 use crate::timefmt;
 use gtk4::prelude::*;
-use gtk4::{Align, Label, ScrolledWindow};
+use gtk4::{Align, Button, Label, ScrolledWindow};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -13,6 +13,7 @@ pub struct CalendarPage {
     month_lbl: Label,
     grid: gtk4::Grid,
     next: Label,
+    next_actions: gtk4::Box,
     list: gtk4::Box,
     empty: Label,
     year: Cell<i32>,
@@ -60,6 +61,9 @@ impl CalendarPage {
         next.set_xalign(0.0);
         next.set_valign(Align::Start);
         right.append(&next);
+        let next_actions = super::hbox(6);
+        next_actions.set_halign(gtk4::Align::Start);
+        right.append(&next_actions);
 
         let scroll = ScrolledWindow::new();
         scroll.set_vexpand(true);
@@ -82,6 +86,7 @@ impl CalendarPage {
             month_lbl: month_lbl.clone(),
             grid: grid.clone(),
             next,
+            next_actions: next_actions.clone(),
             list,
             empty,
             year: Cell::new(y),
@@ -154,6 +159,9 @@ impl CalendarPage {
         while let Some(c) = self.list.first_child() {
             self.list.remove(&c);
         }
+        while let Some(c) = self.next_actions.first_child() {
+            self.next_actions.remove(&c);
+        }
         self.empty.set_visible(events.is_empty());
 
         let now = super::now_secs();
@@ -161,6 +169,7 @@ impl CalendarPage {
         if events.is_empty() {
             self.next.set_text("");
             self.next.set_visible(false);
+            self.next_actions.set_visible(false);
             return;
         }
         let e = &events[next_idx];
@@ -169,13 +178,38 @@ impl CalendarPage {
         } else {
             format!("  ·  {}", e.time_str)
         };
-        let loc = if e.location.is_empty() {
-            String::new()
-        } else {
-            format!("\n{}", e.location)
-        };
-        self.next.set_text(&format!("{}{when}{loc}", e.summary));
+        // keep next label as summary+time, location shown via buttons below
+        self.next.set_text(&format!("{}{when}", e.summary));
         self.next.set_visible(true);
+        // next_actions: Join + Directions/Leave for the highlighted next event
+        if let Some(url) = e.join_url.clone() {
+            let kind = e.join_kind.clone().unwrap_or_else(|| "Join".into());
+            self.next_actions.append(&join_button(&url, &kind));
+        }
+        if let Some(dir) = e.directions_url.clone() {
+            let dir_label = if let Some(leave) = e.leave_label.clone() {
+                format!("Directions · {}", leave)
+            } else {
+                "Directions".into()
+            };
+            self.next_actions
+                .append(&directions_button(&dir, &dir_label));
+            if !e.location.is_empty() {
+                let loc_lbl = label(&["na-dim"], &e.location);
+                loc_lbl.set_wrap(true);
+                loc_lbl.set_xalign(0.0);
+                self.next_actions.append(&loc_lbl);
+            }
+        } else if !e.location.is_empty() && e.join_url.is_none() {
+            // no directions (e.g., virtual event with non-address location) — still show location
+            let loc_lbl = label(&["na-dim"], &e.location);
+            loc_lbl.set_wrap(true);
+            loc_lbl.set_xalign(0.0);
+            self.next_actions.append(&loc_lbl);
+        }
+        self.next_actions
+            .set_visible(self.next_actions.first_child().is_some());
+
         for (j, ev) in events.iter().enumerate() {
             if j != next_idx {
                 self.list.append(&row(ev));
@@ -236,19 +270,81 @@ fn paint_month(grid: &gtk4::Grid, month_lbl: &Label, y: i32, m: u32) {
 }
 
 fn row(e: &CalEvent) -> gtk4::Box {
-    let r = super::hbox(10);
+    let r = super::vbox(4);
     r.set_css_classes(&["na-cal-row"]);
+    let top = super::hbox(10);
     let time = label(&["na-cal-time"], &e.time_str);
     time.set_width_chars(5);
-    let s = if e.location.is_empty() {
-        e.summary.clone()
-    } else {
-        format!("{}  {}", e.summary, e.location)
-    };
-    let sum = label(&["na-dim"], &s);
+    let sum = label(&["na-dim"], &e.summary);
     sum.set_ellipsize(gtk4::pango::EllipsizeMode::End);
     sum.set_hexpand(true);
-    r.append(&time);
-    r.append(&sum);
+    sum.set_wrap(true);
+    sum.set_xalign(0.0);
+    top.append(&time);
+    top.append(&sum);
+    r.append(&top);
+
+    if !e.location.is_empty() && e.join_url.is_none() && e.directions_url.is_none() {
+        // plain location (no virtual, no physical directions) — show as dim text
+        let loc = label(&["na-dim"], &e.location);
+        loc.set_wrap(true);
+        loc.set_xalign(0.0);
+        loc.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        r.append(&loc);
+    }
+
+    // action row: Join + Directions/Leave
+    let actions = super::hbox(6);
+    actions.set_halign(gtk4::Align::Start);
+    let mut has_action = false;
+    if let Some(url) = e.join_url.clone() {
+        let kind = e.join_kind.clone().unwrap_or_else(|| "Join".into());
+        actions.append(&join_button(&url, &kind));
+        has_action = true;
+    }
+    if let Some(dir) = e.directions_url.clone() {
+        let dir_label = if let Some(leave) = e.leave_label.clone() {
+            format!("Directions · {}", leave)
+        } else {
+            "Directions".into()
+        };
+        actions.append(&directions_button(&dir, &dir_label));
+        // show address under button if not already shown
+        let addr = label(&["na-dim"], &e.location);
+        addr.set_wrap(true);
+        addr.set_xalign(0.0);
+        addr.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        r.append(&addr);
+        has_action = true;
+    }
+    if has_action {
+        r.append(&actions);
+    }
     r
+}
+
+fn join_button(url: &str, kind: &str) -> Button {
+    let label = match kind {
+        "Meet" => "Join Meet",
+        "Zoom" => "Join Zoom",
+        "Teams" => "Join Teams",
+        _ => "Join",
+    };
+    let b = Button::with_label(label);
+    b.set_css_classes(&["na-banner-action"]);
+    let url = url.to_string();
+    b.connect_clicked(move |_| {
+        crate::util::open_paths(std::slice::from_ref(&url));
+    });
+    b
+}
+
+fn directions_button(url: &str, label: &str) -> Button {
+    let b = Button::with_label(label);
+    b.set_css_classes(&["na-btn", "ghost"]);
+    let url = url.to_string();
+    b.connect_clicked(move |_| {
+        crate::util::open_paths(std::slice::from_ref(&url));
+    });
+    b
 }

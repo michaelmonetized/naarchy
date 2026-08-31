@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 — calendar join + directions + leave
+
+- **Calendar Meet/Zoom/Teams**: if ICS `DESCRIPTION`/`LOCATION`/`URL`/`X-GOOGLE-CONFERENCE` contains `meet.google.com` / `zoom.us` / `teams.microsoft.com|teams.live.com`, the list item now shows a `Join Meet/Zoom/Teams` button (`src/services/calendar.rs:360` `extract_join_url` scans all props for `https://` URLs, `classify_join_url`) opening via `xdg-open` (`src/ui/calendar.rs:250`).
+- **Directions + time to leave**: if `LOCATION` is a physical address (not a URL, `src/services/calendar.rs:400` `is_physical_address` heuristic), the item shows a `Directions` button (`https://www.google.com/maps/dir/?api=1&destination=…` `src/services/calendar.rs:410`) and, after geocoding the address via Nominatim + routing via OSRM with your current location (portal fallback to `ipinfo.io` `35.4887,-82.9887` `src/services/location.rs:106`), a `Leave 09:23 (18 min)` label (`src/services/location.rs:219` `leave_label_for` = `start - travel - 5 min buffer`, cached in `~/.cache/naarchy/geocode.json`/`route.json`).
+
 ## 0.2.3 — calendar ICS fix (no events)
 
 - Fix `DTSTART;TZID=...` and `DTSTART;VALUE=DATE` never parsed — `ics_props` stored full `DTSTART;TZID=...` key so `props.get("DTSTART")` missed, and `parse_dtstart` expected `DTSTART:...:` prefix (`src/services/calendar.rs:260`/`292`). Now key is stripped to `DTSTART` and value is correctly `20260831T100000`. Your private `https://calendar.google.com/calendar/ical/.../basic.ics` feed at `~/.config/naarchy/config.toml:37` now shows `Monday Sales Huddle Meeting` at 10:00 today (was 0 events).

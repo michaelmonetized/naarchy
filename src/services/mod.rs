@@ -1,6 +1,7 @@
 pub mod calendar;
 pub mod clipboard;
 pub mod hyprland;
+pub mod location;
 pub mod mpris;
 pub mod notifd;
 pub mod settings;
@@ -26,6 +27,8 @@ pub enum Event {
     ConfigChanged(Box<crate::config::Config>),
     /// ICS feeds were refreshed; today's meetings lived in shared.cal_events.
     CalendarReload,
+    /// Enriched with travel times (directions + leave label)
+    CalendarEnriched(Vec<crate::services::calendar::CalEvent>),
 }
 
 /// Fresh content observed on the Wayland clipboard.

@@ -1,6 +1,6 @@
 # Maintainer: Michael C Hurley <michaelmonetized@gmail.com>
 pkgname=naarchy
-pkgver=0.2.3
+pkgver=0.2.4
 pkgrel=1
 pkgdesc="Notch / dynamic-island overlay for Omarchy and Hyprland"
 arch=('x86_64' 'aarch64')
