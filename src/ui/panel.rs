@@ -15,6 +15,7 @@ pub struct PanelUi {
     pub win: ApplicationWindow,
     stack: Stack,
     dock: gtk4::Box,
+    dock_wrap: gtk4::Box,
     content: gtk4::Box,
     bg: gtk4::DrawingArea,
     dock_buttons: Vec<(Tab, ToggleButton)>,
@@ -199,11 +200,15 @@ impl PanelUi {
         dock_wrap.set_halign(gtk4::Align::Center);
         dock_wrap.set_margin_bottom(14);
         dock_wrap.set_margin_top(4);
+        dock_wrap.set_opacity(0.0);
         dock_wrap.append(&dock);
         // Settings — opens ~/.config/naarchy/config.toml in nvim via omarchy-launch-config-editor
         {
             let settings = crate::ui::glyph_btn(&["na-dock-btn", "na-settings-btn"], g::SETTINGS);
             settings.set_tooltip_text(Some("Settings — Edit config in Neovim"));
+            // ensure pointer cursor not text caret
+            settings.set_cursor(gdk::Cursor::from_name("pointer", None).as_ref());
+            settings.set_focusable(true);
             settings.connect_clicked(|_| {
                 crate::util::open_config_in_editor();
             });
@@ -271,6 +276,7 @@ impl PanelUi {
             win,
             stack,
             dock,
+            dock_wrap: dock_wrap.clone(),
             content,
             bg,
             dock_buttons,
@@ -367,6 +373,7 @@ impl PanelUi {
         let bg_tick = bg.clone();
         let content = self.content.clone();
         let dock = self.dock.clone();
+        let dock_wrap = self.dock_wrap.clone();
         let win = self.win.clone();
         let tick = self.tick.clone();
         let frame = Rc::new(Cell::new(0u32));
@@ -384,6 +391,7 @@ impl PanelUi {
             content.set_opacity(motion::content_opacity(p));
             let d_op = motion::dock_opacity(p);
             dock.set_opacity(d_op);
+            dock_wrap.set_opacity(d_op);
             dock.set_margin_bottom(motion::lerp(-8.0, 0.0, d_op) as i32);
 
             // throttle input region updates to ~20Hz to avoid per-frame layout + Wayland round-trip
@@ -395,7 +403,8 @@ impl PanelUi {
                 let wh = win.height().max(1) as f64;
                 let cap = liquid::geom(ww, wh, p, DOCK_RESERVE);
                 let dock_hit = if d_op > 0.05 {
-                    liquid::widget_rect_in(&win, &dock)
+                    // include settings gear which lives in dock_wrap, not dock
+                    liquid::widget_rect_in(&win, &dock_wrap)
                 } else {
                     None
                 };
@@ -407,6 +416,7 @@ impl PanelUi {
                 vel.set(0.0);
                 content.set_opacity(motion::content_opacity(tgt));
                 dock.set_opacity(motion::dock_opacity(tgt));
+                dock_wrap.set_opacity(motion::dock_opacity(tgt));
                 bg.queue_draw();
                 if tgt < 0.5 {
                     liquid::clear_input_region(&win);
@@ -416,7 +426,7 @@ impl PanelUi {
                     let ww = win.width().max(1) as f64;
                     let wh = win.height().max(1) as f64;
                     let cap = liquid::geom(ww, wh, 1.0, DOCK_RESERVE);
-                    liquid::apply_input_region(&win, cap, liquid::widget_rect_in(&win, &dock));
+                    liquid::apply_input_region(&win, cap, liquid::widget_rect_in(&win, &dock_wrap));
                 }
                 return false;
             }

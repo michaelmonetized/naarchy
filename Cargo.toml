@@ -1,6 +1,6 @@
 [package]
 name = "naarchy"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 description = "A free, open-source notch / dynamic-island layer for Omarchy & Hyprland — file shelf, clipboard, media, HUDs."

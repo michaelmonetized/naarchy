@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — settings hit-test + cursor
+
+- Fix settings gear not clickable: `dock_wrap` was outside `apply_input_region` so hover counted as leave → panel collapsed before click; now `dock_wrap` rect (dock + gear) is the hit region and throttled to 20 Hz (`src/ui/panel.rs:363`).
+- Gear now shows `pointer` cursor (`gdk::Cursor::from_name("pointer")` `src/ui/panel.rs:206`) instead of text caret, and fades with dock.
+
 ## 0.2.0 — perf + timer + settings
 
 - **Perf**: stable FNV cache_key fixes art/shelf/clip re-download each restart; cached `Palette` removes per-frame omarchy file I/O (pill/timer/liquid); `idle`→`timeout 16ms` stops busy-loop wake; throttled `apply_input_region` (~20 Hz); liquid `COPIES 32→18 LAYERS 16→8`; hyprland hover `33→60ms` + surface-aware stay-open; mpris `1.5s→2s` + `400→900ms`; clipboard `600→900ms`; config watcher `700→1100ms`; pill `measure` only on mood change; clipview borrow without 400 `to_lowercase` allocs per keystroke; `parse_payload` O(n²)→O(n).
