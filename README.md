@@ -20,11 +20,13 @@ something is live.
 ![Inbox — drop a file, get a thumbnail grid](docs/screenshots/v0.3/panel-inbox.jpg)
 
 <p align="center">
-  <img src="docs/screenshots/v0.3/panel-timer-live.jpg" alt="Collapsed live timer" width="48%" />
-  <img src="docs/screenshots/v0.3/panel-clipboard.jpg" alt="Clipboard history" width="48%" />
+  <img src="docs/screenshots/v0.3/strip-files.jpg" alt="Collapsed Inbox pile and file count" />
 </p>
 
-![Calendar](docs/screenshots/v0.3/panel-calendar.jpg)
+<p align="center">
+  <img src="docs/screenshots/v0.3/panel-clipboard.jpg" alt="Clipboard history" width="48%" />
+  <img src="docs/screenshots/v0.3/panel-calendar.jpg" alt="Calendar" width="48%" />
+</p>
 
 ## What it does
 

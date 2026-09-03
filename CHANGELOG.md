@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — the island stays an island
+
+- **Live width**: GTK `measure` on hexpand children returned ~11k px, so a running timer painted a black bar across the whole display. Width is `min_w_for` now (idle 370, timer 650, files 610, media 730).
+- **Docs**: product screenshots and a 10-second recording on the Hurleyus wallpaper, no T3 Code in the frame.
+
 ## 0.3.0 — stop crashing, stop spinning, look like a product
 
 - **Crash**: CSS restyle held a `RefCell` across a GTK redraw. That's a panic through C, which is SIGABRT. Drop the borrow before applying CSS. Reuse one `CssProvider`. Clone media state before mutating widgets. MPRIS proxies no longer `expect`.

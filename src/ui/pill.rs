@@ -500,12 +500,7 @@ impl PillUi {
     fn relayout(&self) {
         let mood = self.last_mood.get();
         let min = self.min_w_for(mood);
-        let w_tgt = if mood == Mood::None {
-            min as f64
-        } else {
-            let (_, nat, _, _) = self.root.measure(gtk4::Orientation::Horizontal, -1);
-            nat.max(min) as f64
-        };
+        let w_tgt = min as f64;
         let h_tgt = Self::h_for(mood) as f64;
         let w_ok =
             (self.w_target.get() - w_tgt).abs() < 2.0 && (self.w_cur.get() - w_tgt).abs() < 1.0;
