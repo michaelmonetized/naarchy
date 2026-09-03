@@ -31,6 +31,47 @@ fn libc_getuid() -> u32 {
     unsafe { getuid() }
 }
 
+fn spawn_cmd(program: &str, args: &[&str]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// Open the Spotify web app, or focus it if it is already open.
+///
+/// Uses Omarchy's focus-or-launch helper so we do not trip
+/// `omarchy launch spotify` (that installs the native client when
+/// `/usr/bin/spotify` is missing). Falls back to the desktop file.
+///
+/// Arguments: none.
+///
+/// Returns: nothing. Fire-and-forget.
+pub fn launch_spotify() {
+    if spawn_cmd(
+        "omarchy-launch-or-focus-webapp",
+        &["spotify", "https://open.spotify.com/"],
+    ) {
+        return;
+    }
+    let _ = spawn_cmd("gtk-launch", &["Spotify"]);
+}
+
+/// Open cliamp in a terminal, or focus an existing cliamp TUI.
+///
+/// Arguments: none.
+///
+/// Returns: nothing. Fire-and-forget.
+pub fn launch_cliamp() {
+    if spawn_cmd("omarchy-launch-or-focus-tui", &["cliamp"]) {
+        return;
+    }
+    let _ = spawn_cmd("gtk-launch", &["cliamp"]);
+}
+
 /// Open paths/uris with the system opener without blocking the UI.
 pub fn open_paths(paths: &[String]) {
     for p in paths {

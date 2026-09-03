@@ -1,11 +1,10 @@
 # Maintainer: Michael C Hurley <michaelmonetized@gmail.com>
 pkgname=naarchy
-pkgver=0.2.5
+pkgver=0.3.3
 pkgrel=1
 pkgdesc="Notch / dynamic-island overlay for Omarchy and Hyprland"
 arch=('x86_64' 'aarch64')
-# Uncomment after v$pkgver is tagged:
-# url="https://github.com/michaelmonetized/naarchy"
+url="https://github.com/michaelmonetized/naarchy"
 license=('MIT')
 depends=(gtk4 gtk4-layer-shell)
 optdepends=(
@@ -16,8 +15,8 @@ optdepends=(
 )
 makedepends=(cargo)
 options=(!lto)
-# source=("$pkgname-$pkgver.tar.gz::https://github.com/michaelmonetized/naarchy/archive/refs/tags/v$pkgver.tar.gz")
-# sha256sums=('SKIP')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/michaelmonetized/naarchy/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
 
 prepare() {
   cd "$pkgname-$pkgver"

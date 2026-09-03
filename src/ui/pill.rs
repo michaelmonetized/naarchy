@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 const PILL_H: i32 = super::liquid::NOTCH_H as i32;
 const LIVE_H: i32 = super::liquid::LIVE_H as i32;
+const PILL_ART_PX: i32 = 32;
 
 /// Which content pair is currently wrapped around the notch.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,7 +26,6 @@ pub struct PillUi {
     mid_box: gtk4::Box,
     right_box: gtk4::Box,
     clock_label: Label,
-    battery_label: Label,
     timer_icon: Label,
     timer_count: Label,
     media_art: gtk4::Box,
@@ -99,10 +99,13 @@ impl PillUi {
 
         let timer_icon = label(&["na-bubble-text", "na-glyph"], super::g::CLOCK);
         let media_art = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-        media_art.set_css_classes(&["na-media-art"]);
+        media_art.set_css_classes(&["na-media-art--chip"]);
         media_art.set_valign(gtk4::Align::Center);
+        media_art.set_halign(gtk4::Align::Center);
         media_art.set_overflow(gtk4::Overflow::Hidden);
-        media_art.set_size_request(22, 22);
+        media_art.set_hexpand(false);
+        media_art.set_vexpand(false);
+        media_art.set_size_request(PILL_ART_PX, PILL_ART_PX);
         media_art.set_visible(false);
         let media_icon = label(&["na-bubble-text", "na-glyph"], super::g::MUSIC);
         media_icon.set_visible(false);
@@ -127,13 +130,10 @@ impl PillUi {
 
         let clock_label = label(&["na-chip"], "");
         clock_label.set_visible(show_clock);
-        let battery_label = label(&["na-chip"], "");
-        battery_label.set_visible(false);
         let mid_spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
         mid_spacer.set_hexpand(true);
         notch_box.append(&clock_label);
         notch_box.append(&mid_spacer);
-        notch_box.append(&battery_label);
 
         // Right bubble — grows to the right of the notch
         let right_box = hbox(4);
@@ -147,7 +147,9 @@ impl PillUi {
         let media_title = label(&["na-bubble-text"], "");
         media_title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         media_title.set_single_line_mode(true);
-        media_title.set_max_width_chars(18);
+        media_title.set_width_chars(22);
+        media_title.set_max_width_chars(28);
+        media_title.set_xalign(1.0);
         let files_count = label(&["na-bubble-text"], "0");
         right_box.append(&timer_count);
         right_box.append(&media_title);
@@ -236,7 +238,6 @@ impl PillUi {
             mid_box: notch_box,
             right_box,
             clock_label,
-            battery_label,
             timer_icon,
             timer_count,
             media_art,
@@ -264,13 +265,12 @@ impl PillUi {
         p.win.present();
         p.tick();
         p.update_media();
-        p.update_battery();
         p
     }
 
     /// Refresh clock + decide which bubbles wrap the notch, then resize the
     /// window to exactly notch width + whatever is active. Called every second
-    /// and whenever media/battery/shelf change.
+    /// and whenever media/shelf change.
     pub fn tick(&self) {
         super::with_shared(|sh| {
             let fmt = sh.cfg.borrow().clock.format.clone();
@@ -296,10 +296,11 @@ impl PillUi {
                             if let Ok(tex) =
                                 gdk::Texture::from_filename(std::path::Path::new(&path))
                             {
-                                let pic = gtk4::Picture::for_paintable(&tex);
-                                pic.set_size_request(22, 22);
-                                pic.set_content_fit(gtk4::ContentFit::Cover);
-                                self.media_art.append(&pic);
+                                let img = gtk4::Image::from_paintable(Some(&tex));
+                                img.set_pixel_size(PILL_ART_PX);
+                                img.set_hexpand(false);
+                                img.set_vexpand(false);
+                                self.media_art.append(&img);
                                 self.media_art.set_visible(true);
                             }
                         }
@@ -315,18 +316,6 @@ impl PillUi {
                     self.media_art.set_visible(false);
                 }
             }
-            let mood = self.update_mood(sh);
-            self.last_mood.set(mood);
-            self.relayout();
-        });
-    }
-
-    pub fn update_battery(&self) {
-        super::with_shared(|sh| {
-            let b = *sh.battery.borrow();
-            let bolt = if b.charging { "⚡" } else { "" };
-            self.battery_label
-                .set_text(&format!("{}{:.0}%", bolt, b.percent));
             let mood = self.update_mood(sh);
             self.last_mood.set(mood);
             self.relayout();
@@ -388,8 +377,7 @@ impl PillUi {
         let has_art = mood == Mood::Media && self.last_art_path.borrow().is_some();
         self.media_icon.set_visible(mood == Mood::Media && !has_art);
         self.media_art.set_visible(has_art);
-        self.media_art
-            .set_size_request(if live { 40 } else { 22 }, if live { 40 } else { 22 });
+        self.media_art.set_size_request(PILL_ART_PX, PILL_ART_PX);
         if live {
             self.root.add_css_class("na-pill-live");
         } else {
@@ -414,9 +402,6 @@ impl PillUi {
         self.mid_box.set_hexpand(live);
         self.clock_label
             .set_visible(self.show_clock && mood == Mood::None);
-        let batt_ok = sh.battery.borrow().present && sh.cfg.borrow().features.battery_chip;
-        self.battery_label
-            .set_visible(batt_ok && mood == Mood::None);
         mood
     }
 
@@ -475,7 +460,7 @@ impl PillUi {
         let ears = match mood {
             Mood::None => 0,
             Mood::Timer | Mood::Done => 280,
-            Mood::Media => 360,
+            Mood::Media => 460,
             Mood::Files => 240,
         };
         match mood {

@@ -378,12 +378,6 @@ fn handle_event(app: &Rc<App>, ev: Event) {
                 p.media_update();
             }
         }
-        Event::Battery(b) => {
-            *app.shared.battery.borrow_mut() = b;
-            for p in app.pills.borrow().iter() {
-                p.update_battery();
-            }
-        }
         Event::SchemeDark(dark) => {
             if app.shared.dark.get() != dark {
                 app.shared.dark.set(dark);

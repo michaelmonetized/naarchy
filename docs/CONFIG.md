@@ -45,7 +45,6 @@ clipboard = true          # Clipboard dock item
 calendar = true           # Calendar dock item
 timer = true              # pill live-activity chip (Home widget still exists)
 notifications = false     # own org.freedesktop.Notifications (leave false for mako)
-battery_chip = true
 
 [clipboard]
 max_entries = 200

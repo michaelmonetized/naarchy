@@ -57,7 +57,7 @@ Timer and Media are **Home widgets**, not tabs. There is no Settings tab.
 
 | ID | Feature | Spec |
 |----|---------|------|
-| E1 | Home | Widget grid from `~/.config/naarchy/widgets.json`. Defaults: Timer + Media. Clock and Battery pin in from the Widgets drawer (`text/x-naarchy-widget`). |
+| E1 | Home | Widget grid from `~/.config/naarchy/widgets.json`. Defaults: Timer + Media. Clock pins in from the Widgets drawer (`text/x-naarchy-widget`). |
 | E2 | Inbox (file shelf) | Drop files/folders, text, images. Persist across restarts. Thumbnails. Open (double-click), right-click menu: Open / Reveal / Copy Path / Pin / Remove. Drag tiles **out** to any app (`DragSource`). |
 | E3 | Clipboard history | Watches Wayland clipboard (600 ms poll, always on). Text + images. Search, pin, click to re-copy, right-click Copy / Pin / Remove. Last 200 unpinned. **No drag-out.** |
 | E4 | Calendar | Month grid + today's agenda. Optional public ICS feeds. |
@@ -78,7 +78,7 @@ Timer and Media are **Home widgets**, not tabs. There is no Settings tab.
 
 | ID | Feature | Spec |
 |----|---------|------|
-| S1 | Battery | UPower DisplayDevice; charging / low chips |
+| S1 | Battery | Removed. The Omarchy bar already has it. `naarchy hud battery` remains. |
 | S2 | Clock | Pill clock (`%H:%M`), date on Home clock widget |
 | S3 | Shortcuts | CLI verbs. No xdg-desktop-portal GlobalShortcuts. |
 | S4 | Autostart | `contrib/naarchy.desktop` + `contrib/naarchy.service`. XOR — do not enable both. |
@@ -107,7 +107,7 @@ Surfaces: `PillUi` (overlay) + `PanelUi` (top) + `HudManager`. Layer namespace
 
 ```
 CLI verbs  →  $XDG_RUNTIME_DIR/naarchy.sock  →  Verb mpsc  →  GTK
-Tokio zbus (mpris, upower, settings, notifd) → Event mpsc →  GTK
+Tokio zbus (mpris, settings, notifd) → Event mpsc →  GTK
 ```
 
 ### Persistence

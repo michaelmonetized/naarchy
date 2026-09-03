@@ -10,7 +10,6 @@ pub enum WidgetKind {
     Media,
     Timer,
     Clock,
-    Battery,
 }
 
 impl WidgetKind {
@@ -19,7 +18,6 @@ impl WidgetKind {
             WidgetKind::Media => "Media",
             WidgetKind::Timer => "Timer",
             WidgetKind::Clock => "Clock",
-            WidgetKind::Battery => "Battery",
         }
     }
     /// Nerd Font glyph used on the widget drawer tiles.
@@ -28,16 +26,10 @@ impl WidgetKind {
             WidgetKind::Media => "\u{f001}",
             WidgetKind::Timer => "\u{f017}",
             WidgetKind::Clock => "\u{f017}",
-            WidgetKind::Battery => "\u{f240}",
         }
     }
-    pub fn all() -> [WidgetKind; 4] {
-        [
-            WidgetKind::Media,
-            WidgetKind::Timer,
-            WidgetKind::Clock,
-            WidgetKind::Battery,
-        ]
+    pub fn all() -> [WidgetKind; 3] {
+        [WidgetKind::Media, WidgetKind::Timer, WidgetKind::Clock]
     }
     pub fn from_name(s: &str) -> Option<Self> {
         Self::all()
@@ -70,10 +62,11 @@ impl WidgetStore {
     pub fn load() -> Self {
         let p = Self::path();
         let mut store = match std::fs::read_to_string(&p) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Ok(s) => parse_widgets(&s),
             Err(_) => Self::default(),
         };
-        // 0.2.5: Clock is everywhere, user never wants it in naarchy — migrate existing installs
+        // Clock is on the bar. Battery is gone. Drop leftovers so old
+        // widgets.json still loads instead of resetting the shelf.
         let before = store.widgets.len();
         store.widgets.retain(|k| *k != WidgetKind::Clock);
         if store.widgets.len() != before {
@@ -128,6 +121,25 @@ impl WidgetStore {
     }
 }
 
+fn parse_widgets(s: &str) -> WidgetStore {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else {
+        return WidgetStore::default();
+    };
+    let Some(arr) = v.get("widgets").and_then(|w| w.as_array()) else {
+        return WidgetStore::default();
+    };
+    let widgets: Vec<WidgetKind> = arr
+        .iter()
+        .filter_map(|x| x.as_str())
+        .filter_map(WidgetKind::from_name)
+        .collect();
+    if widgets.is_empty() {
+        WidgetStore::default()
+    } else {
+        WidgetStore { widgets }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,9 +156,14 @@ mod tests {
         let mut s = WidgetStore::default();
         assert!(s.add(WidgetKind::Clock));
         assert!(!s.add(WidgetKind::Clock));
-        assert!(s.add(WidgetKind::Battery));
         let ser = serde_json::to_string(&s).unwrap();
         let back: WidgetStore = serde_json::from_str(&ser).unwrap();
         assert_eq!(back.widgets, s.widgets);
+    }
+
+    #[test]
+    fn old_json_drops_battery() {
+        let s = parse_widgets(r#"{"widgets":["Timer","Media","Battery"]}"#);
+        assert_eq!(s.widgets, vec![WidgetKind::Timer, WidgetKind::Media]);
     }
 }

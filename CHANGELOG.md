@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3 — kill the plus, show the art, drop battery
+
+- **Inbox +** on the player is gone. It dumped a text note of the track onto the shelf. Nobody asked it to keep doing that.
+- **Album art**: Chromium serves real covers as `/tmp/.org.chromium.Chromium.*`. Treating those as the Chrome-icon leftover hid every Spotify cover. Copy the file into the art cache; hollow players are still filtered by `is_live`.
+- **Layout**: panel title + artist sit on their own lines above play/next, so they are not crushed by the buttons. Pill title gets a wider ear. Closed-island art is a 32px chip (`Image` + `pixel_size`) so the full-res cover cannot blow the capsule.
+- **Battery**: Home widget, pill chip, and UPower are gone. The bar already shows percent. Empty-state media is Spotify + cliamp logos. `naarchy hud battery` still works.
+
+## 0.3.2 — dead player is a pair of launchers
+
+- **Media empty state**: a Stopped Chromium MPRIS leftover (no title, Chrome icon as art) was painted as a dead transport row. Hollow players are now `None`. The widget shows Spotify + cliamp logos; click launches (or focuses) the web app / TUI. Any live MPRIS source — Spotify, cliamp, mpv, YouTube in Chromium — still takes the compact player.
+
 ## 0.3.1 — the island stays an island
 
 - **Live width**: GTK `measure` on hexpand children returned ~11k px, so a running timer painted a black bar across the whole display. Width is `min_w_for` now (idle 370, timer 650, files 610, media 730).

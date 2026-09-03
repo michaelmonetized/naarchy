@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/959a779c-8d26-4f23-855d-08b9b4a300fe
   <img src="docs/screenshots/v0.3/strip-timer-live.jpg" alt="Timer live activity wrapping the camera" />
 </p>
 
-![Home — ruler timer, media, battery](docs/screenshots/v0.3/panel-home.jpg)
+![Home — ruler timer, media](docs/screenshots/v0.3/panel-home.jpg)
 
 ![Inbox — drop a file, get a thumbnail grid](docs/screenshots/v0.3/panel-inbox.jpg)
 

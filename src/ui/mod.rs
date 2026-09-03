@@ -41,7 +41,7 @@ pub mod g {
 
 use crate::clip_store::ClipStore;
 use crate::config::Config;
-use crate::services::{BatteryState, MediaState};
+use crate::services::MediaState;
 use crate::shelf_store::ShelfStore;
 use crate::widget_store::WidgetStore;
 use gtk4::gdk;
@@ -145,7 +145,6 @@ pub struct Shared {
     pub shelf: RefCell<ShelfStore>,
     pub clips: RefCell<ClipStore>,
     pub media: RefCell<Option<MediaState>>,
-    pub battery: RefCell<BatteryState>,
     pub tab: Cell<Tab>,
     pub timer: RefCell<Option<TimerState>>,
     /// Widgets placed on the Home shelf (persisted).
@@ -179,7 +178,6 @@ impl Shared {
             shelf: RefCell::new(ShelfStore::load()),
             clips: RefCell::new(ClipStore::load()),
             media: RefCell::new(None),
-            battery: RefCell::new(BatteryState::default()),
             tab: Cell::new(Tab::Home),
             timer: RefCell::new(None),
             widgets: RefCell::new(WidgetStore::load()),

@@ -362,15 +362,6 @@ fn start_daemon() {
                 {
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = services::upower::run(tx).await {
-                            log::debug!("upower unavailable: {e}");
-                        }
-                    });
-                }
-
-                {
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
                         if let Err(e) = services::settings::run(tx).await {
                             log::debug!("portal settings unavailable: {e}");
                         }

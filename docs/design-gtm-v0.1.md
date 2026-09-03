@@ -125,7 +125,7 @@ Canonical tab rail, from `src/ui/mod.rs` `Tab` and `src/ui/panel.rs` dock:
 | Widgets | `widgets` | always | `widgets` | `drawer`, `grid` |
 | Calendar | `cal` | `features.calendar` | `calendar` | `cal` |
 
-**Timer** and **Media** are Home widgets (`WidgetKind::{Timer, Media}`), default-on in `WidgetStore::default()`. Clock and Battery can be pinned from the Widgets drawer. There is no Settings tab. There is no Media tab. There is no Timer tab.
+**Timer** and **Media** are Home widgets (`WidgetKind::{Timer, Media}`), default-on in `WidgetStore::default()`. Clock can be pinned from the Widgets drawer. There is no Settings tab. There is no Media tab. There is no Timer tab. There is no Battery widget.
 
 `features.media` / `features.timer` hide **pill live-activity chips** (`src/ui/pill.rs` mood gating). They do **not** remove the Home widgets. `features.shelf` / `features.clipboard` / `features.calendar` hide the corresponding dock items. Home and Widgets dock items are always present.
 

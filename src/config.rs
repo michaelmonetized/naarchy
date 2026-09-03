@@ -110,7 +110,6 @@ pub struct Features {
     pub calendar: bool,
     pub timer: bool,
     pub notifications: bool,
-    pub battery_chip: bool,
 }
 
 impl Default for Features {
@@ -122,7 +121,6 @@ impl Default for Features {
             calendar: true,
             timer: true,
             notifications: false,
-            battery_chip: true,
         }
     }
 }
@@ -263,7 +261,6 @@ clipboard = true
 calendar = true
 timer = true
 notifications = false   # own org.freedesktop.Notifications (leave false to keep mako/dunst)
-battery_chip = true
 
 [clipboard]
 max_entries = 80

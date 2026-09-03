@@ -5,7 +5,6 @@ pub mod location;
 pub mod mpris;
 pub mod notifd;
 pub mod settings;
-pub mod upower;
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,7 +64,6 @@ impl EventTx {
 #[derive(Debug, Clone)]
 pub enum Event {
     Media(Option<MediaState>),
-    Battery(BatteryState),
     SchemeDark(bool),
     HoverOpen,
     HoverEnd,
@@ -112,11 +110,19 @@ pub struct MediaState {
     pub can_seek: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BatteryState {
-    pub percent: f64,
-    pub charging: bool,
-    pub present: bool,
+impl MediaState {
+    /// True when any MPRIS player is showing a real track.
+    ///
+    /// Playing always counts. Paused still counts if title or artist is set.
+    /// A Stopped Chromium leftover (no title, Chrome icon as art) does not —
+    /// that is "nothing playing", not a dead transport row.
+    ///
+    /// Arguments: none (uses `playing`, `title`, `artist`).
+    ///
+    /// Returns: whether the Home media widget should show transport.
+    pub fn is_live(&self) -> bool {
+        self.playing || !self.title.trim().is_empty() || !self.artist.trim().is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,4 +184,53 @@ pub enum Verb {
         body: String,
     },
     Quit,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MediaState;
+
+    #[test]
+    fn hollow_chromium_is_not_live() {
+        let st = MediaState {
+            bus: "org.mpris.MediaPlayer2.chromium.instance1".into(),
+            player: "chromium".into(),
+            playing: false,
+            art_url: Some("file:///tmp/.org.chromium.Chromium.J6SAdm".into()),
+            ..Default::default()
+        };
+        assert!(!st.is_live());
+    }
+
+    #[test]
+    fn paused_track_is_live() {
+        let st = MediaState {
+            title: "Royalty".into(),
+            artist: "Måneskin".into(),
+            playing: false,
+            player: "chromium".into(),
+            ..Default::default()
+        };
+        assert!(st.is_live());
+    }
+
+    #[test]
+    fn playing_without_metadata_is_live() {
+        let st = MediaState {
+            playing: true,
+            player: "mpv".into(),
+            ..Default::default()
+        };
+        assert!(st.is_live());
+    }
+
+    #[test]
+    fn whitespace_title_is_not_live() {
+        let st = MediaState {
+            title: "   ".into(),
+            player: "firefox".into(),
+            ..Default::default()
+        };
+        assert!(!st.is_live());
+    }
 }

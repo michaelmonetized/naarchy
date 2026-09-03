@@ -62,7 +62,7 @@ or superseded by a Linux-native equivalent.
 | Feature | Droppy | NotchNook | Boring.Notch | **Naarchy** |
 |---|---|---|---|---|
 | Volume/brightness HUDs | ✅ | ✅ | ➖ | ⚠️ CLI + binds; **no** background pamixer watcher |
-| Battery + charging | ✅ | ✅ | ✅ | ✅ UPower |
+| Battery + charging | ✅ | ✅ | ✅ | HUD only (`naarchy hud battery`) |
 | Notification banners in notch | ✅ | partial | ➖ | ⚠️ `naarchy notify` always. Bus-name grab **defaults off** (mako keeps the name). |
 | Calendar month view | ✅ | ✅ | 🚧 | ✅ + optional ICS feeds |
 | Timers as live activity | ✅ | ✅ | ➖ | ✅ 1/5/10/25 presets. 25m is not a pomodoro cycle. |

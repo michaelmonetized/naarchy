@@ -1,5 +1,5 @@
 //! Home shelf: renders whichever widgets are enabled in the widget store
-//! (Timer, Media, Clock, Battery). Widgets are dragged in from the drawer via
+//! (Timer, Media, Clock). Widgets are dragged in from the drawer via
 //! the `text/x-naarchy-widget` mime type.
 
 use super::media::MediaPage;
@@ -17,8 +17,6 @@ struct Slot {
     box_: gtk4::Box,
     clock_lbl: Option<Label>,
     clock_date: Option<Label>,
-    battery_lbl: Option<Label>,
-    battery_sub: Option<Label>,
     media: Option<MediaPage>,
     timer: Option<TimerUi>,
 }
@@ -50,12 +48,11 @@ impl HomePage {
             slot_box.set_vexpand(true);
 
             let body = vbox(4);
+            body.set_hexpand(true);
             slot_box.append(&body);
 
             let mut clock_lbl = None;
             let mut clock_date = None;
-            let mut battery_lbl = None;
-            let mut battery_sub = None;
             let mut media = None;
             let mut timer = None;
             match kind {
@@ -72,12 +69,6 @@ impl HomePage {
                     body.append(clock_lbl.as_ref().unwrap());
                     body.append(clock_date.as_ref().unwrap());
                 }
-                WidgetKind::Battery => {
-                    battery_lbl = Some(label(&["na-clock-big", "na-batt"], "—"));
-                    battery_sub = Some(label(&["na-dim"], ""));
-                    body.append(battery_lbl.as_ref().unwrap());
-                    body.append(battery_sub.as_ref().unwrap());
-                }
             }
             if let Some(t) = timer.as_ref() {
                 body.append(t.root());
@@ -90,8 +81,6 @@ impl HomePage {
                 box_: slot_box,
                 clock_lbl,
                 clock_date,
-                battery_lbl,
-                battery_sub,
                 media,
                 timer,
             });
@@ -162,18 +151,6 @@ impl HomePage {
                     .unwrap_or_else(|| "%H:%M".into());
                 l.set_text(&fmt_clock(now, &fmt));
                 d.set_text(&crate::timefmt::strftime_local(now, "%A, %b %e"));
-            }
-            if let (Some(b), Some(sub)) = (s.battery_lbl.as_ref(), s.battery_sub.as_ref()) {
-                super::with_shared(|sh| {
-                    let st = *sh.battery.borrow();
-                    if st.present {
-                        b.set_text(&format!("{}%", st.percent.round() as i64));
-                        sub.set_text(if st.charging { "Charging" } else { "Battery" });
-                    } else {
-                        b.set_text("—");
-                        sub.set_text("No battery");
-                    }
-                });
             }
         }
     }

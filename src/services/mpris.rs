@@ -224,6 +224,9 @@ async fn scan_and_emit(
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     for (_, _, bus) in ranked {
         if let Ok(st) = snapshot(conn, bus).await {
+            if !st.is_live() {
+                continue;
+            }
             set_active(active, Some(bus.clone()));
             tx.send(Event::Media(Some(st)));
             return Ok(());
@@ -328,7 +331,7 @@ fn resolve_art(st: &mut MediaState) {
     };
     if let Some(rest) = url.strip_prefix("file://") {
         let path = percent_decode(rest.trim_start_matches("localhost"));
-        st.art_path = Some(path);
+        st.art_path = cache_local_art(&url, &path);
         return;
     }
     if url.starts_with("http://") || url.starts_with("https://") {
@@ -391,4 +394,70 @@ fn resolve_art(st: &mut MediaState) {
 fn art_fetching() -> &'static Mutex<HashSet<String>> {
     static S: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
     S.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Copy a local `file://` art path into the naarchy cache.
+///
+/// Chromium hands out `/tmp/.org.chromium.Chromium.*` for both the Chrome
+/// icon (hollow leftover) and real album art. The leftover is filtered by
+/// `MediaState::is_live`. The tmp file itself can vanish between scans, so
+/// we snapshot bytes into `$XDG_CACHE_HOME/naarchy/art/`.
+///
+/// Arguments:
+/// - `url`: original `mpris:artUrl` (cache key)
+/// - `path`: decoded local path
+///
+/// Returns: a path that still exists, or `None` if the source is already gone.
+fn cache_local_art(url: &str, path: &str) -> Option<String> {
+    let src = std::path::Path::new(path);
+    if !src.is_file() {
+        return None;
+    }
+    let dir = crate::util::cache_dir().join("art");
+    if src.starts_with(&dir) {
+        return Some(path.to_string());
+    }
+    let key = crate::util::cache_key(url.as_bytes());
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| e.len() <= 5)
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let dest = dir.join(format!("{key}{ext}"));
+    if dest.is_file() {
+        return Some(dest.to_string_lossy().into_owned());
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    match std::fs::copy(src, &dest) {
+        Ok(_) => Some(dest.to_string_lossy().into_owned()),
+        Err(_) => Some(path.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cache_local_art;
+
+    #[test]
+    fn missing_local_art_is_none() {
+        assert!(cache_local_art("file:///nope", "/nope/missing.png").is_none());
+    }
+
+    #[test]
+    fn copies_tmp_art_into_cache() {
+        let dir = std::env::temp_dir().join("naarchy-art-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let src = dir.join("cover.bin");
+        std::fs::write(&src, b"not-a-real-png").unwrap();
+        let got = cache_local_art(
+            "file:///tmp/.org.chromium.Chromium.TEST",
+            src.to_str().unwrap(),
+        )
+        .expect("copied");
+        assert!(std::path::Path::new(&got).is_file());
+        assert_ne!(got, src.to_string_lossy());
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&got);
+    }
 }

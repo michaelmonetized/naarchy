@@ -350,6 +350,15 @@ window.naarchy box.na-drop-veil {{
   background-color: #2a2a2c;
   box-shadow: none;
 }}
+.na-media-art--chip {{
+  border-radius: 8px;
+  background-color: #2a2a2c;
+  box-shadow: none;
+  min-width: 32px;
+  min-height: 32px;
+  max-width: 32px;
+  max-height: 32px;
+}}
 .na-media-card {{
   border-radius: 12px;
   padding: 4px 0;
@@ -397,6 +406,19 @@ window.naarchy box.na-drop-veil {{
   transition: background-color 160ms {ease}, color 160ms {ease};
 }}
 .na-btn:hover {{ background-color: {glass_2}; }}
+.na-media-launchers {{
+  min-height: 56px;
+}}
+.na-btn.na-media-launch {{
+  min-width: 56px;
+  min-height: 56px;
+  padding: 0;
+  border-radius: 14px;
+  background-color: transparent;
+}}
+.na-btn.na-media-launch:hover {{
+  background-color: rgba(255,255,255,0.10);
+}}
 .na-btn.play {{
   background-color: rgba(255,255,255,0.92);
   color: #111118;
