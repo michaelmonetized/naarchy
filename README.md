@@ -7,7 +7,7 @@ Native GTK4 on Omarchy / Hyprland. MIT. Not Electron. Not a blurry fog hanging
 off the camera. A black glass island that fills the hole and grows ears when
 something is live.
 
-https://github.com/michaelmonetized/naarchy/blob/main/docs/recordings/island-demo.mp4
+https://github.com/user-attachments/assets/959a779c-8d26-4f23-855d-08b9b4a300fe
 
 <p align="center">
   <img src="docs/screenshots/v0.3/strip-timer-live.jpg" alt="Timer live activity wrapping the camera" />
