@@ -46,9 +46,9 @@ impl Default for Appearance {
             notch_mode: false,
             margin_top: 0,
             pill_width_notch: 190,
-            pill_width_island: 392,
-            panel_width: 760,
-            panel_height: 540,
+            pill_width_island: 370,
+            panel_width: 680,
+            panel_height: 460,
             opacity: 0.98,
         }
     }
@@ -137,7 +137,7 @@ pub struct ClipboardCfg {
 impl Default for ClipboardCfg {
     fn default() -> Self {
         Self {
-            max_entries: 200,
+            max_entries: 80,
             max_image_bytes: 8 * 1024 * 1024,
         }
     }
@@ -242,10 +242,10 @@ omarchy = true          # pull accent/background/foreground from the active omar
 radius = 24
 notch_mode = false        # true = hug a physical notch (~190px pill)
 # pill_width_notch = 190
-# pill_width_island = 392
+# pill_width_island = 370
 # margin_top = 0            # pixels below the top edge (0 = flush)
-panel_width = 760
-panel_height = 540
+panel_width = 680
+panel_height = 460
 opacity = 0.98
 
 [behavior]
@@ -266,7 +266,7 @@ notifications = false   # own org.freedesktop.Notifications (leave false to keep
 battery_chip = true
 
 [clipboard]
-max_entries = 200
+max_entries = 80
 max_image_bytes = 8388608
 
 [hud]

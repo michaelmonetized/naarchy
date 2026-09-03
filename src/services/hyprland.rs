@@ -1,10 +1,9 @@
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crate::services::Event;
+use crate::services::{Event, EventTx};
 
 fn hypr_dirs() -> Option<(PathBuf, PathBuf)> {
     let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
@@ -58,12 +57,7 @@ pub struct HoverZone {
 
 /// Spawns the hover sampler + fullscreen/monitor event watcher.
 /// Falls back silently on non-Hyprland compositors.
-pub fn spawn(
-    tx: Sender<Event>,
-    zone: HoverZone,
-    hover_ms: u64,
-    hover_open: bool,
-) -> HyprlandHandle {
+pub fn spawn(tx: EventTx, zone: HoverZone, hover_ms: u64, hover_open: bool) -> HyprlandHandle {
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     if !available() {
@@ -90,13 +84,12 @@ pub fn spawn(
                     if let Some(rest) = line.strip_prefix("fullscreen>>") {
                         // "0"/"1"/"2" — any nonzero means a window is fullscreen
                         let on = rest.trim() != "0";
-                        let _ = tx.send(Event::Fullscreen(on));
+                        tx.send(Event::Fullscreen(on));
                     } else if line.starts_with("activewindow>>") {
-                        // A regular window grabbed focus — not our layer surfaces.
-                        let _ = tx.send(Event::FocusLost);
+                        tx.send(Event::FocusLost);
                     } else if line.starts_with("monitoradded>>") {
                         if let Some(name) = line.split(">>").nth(1) {
-                            let _ = tx.send(Event::MonitorAdded(name.to_string()));
+                            tx.send(Event::MonitorAdded(name.to_string()));
                         }
                     }
                 }
@@ -117,9 +110,9 @@ pub fn spawn(
             let mut sent_open = false;
             let mut mon = monitor_box();
             let mut mon_tick = Instant::now();
-            let idle = Duration::from_millis(60);
+            let mut last_y = 9999.0_f64;
             while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
-                if mon_tick.elapsed() > Duration::from_secs(2) {
+                if mon_tick.elapsed() > Duration::from_secs(8) {
                     if let Some(m) = monitor_box() {
                         mon = Some(m);
                     }
@@ -128,6 +121,7 @@ pub fn spawn(
                 let pos = request("cursorpos");
                 match pos.and_then(|p| parse_pos(&p)) {
                     Some((x, y)) => {
+                        last_y = y;
                         let in_open_strip = y <= band;
                         let on_surface = mon
                             .map(|(mx, mw)| over_surface(x, y, mx, mw, &zone))
@@ -136,7 +130,7 @@ pub fn spawn(
                             if in_open_strip {
                                 let since = *in_band_since.get_or_insert_with(Instant::now);
                                 if since.elapsed() >= dwell {
-                                    let _ = tx.send(Event::HoverOpen);
+                                    tx.send(Event::HoverOpen);
                                     sent_open = true;
                                 }
                             } else {
@@ -146,7 +140,7 @@ pub fn spawn(
                             in_band_since = None;
                         } else {
                             in_band_since = None;
-                            let _ = tx.send(Event::HoverEnd);
+                            tx.send(Event::HoverEnd);
                             sent_open = false;
                         }
                     }
@@ -154,6 +148,11 @@ pub fn spawn(
                         in_band_since = None;
                     }
                 }
+                let idle = if last_y <= 80.0 {
+                    Duration::from_millis(40)
+                } else {
+                    Duration::from_millis(140)
+                };
                 std::thread::sleep(idle);
             }
         });

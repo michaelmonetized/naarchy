@@ -8,6 +8,58 @@ pub mod settings;
 pub mod upower;
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::OnceLock;
+
+/// GTK main context, installed once the UI thread is up. Workers wake it
+/// instead of the UI spinning a 60 Hz poll.
+static GTK_CTX: OnceLock<gtk4::glib::MainContext> = OnceLock::new();
+static WAKE_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub fn install_wake(ctx: gtk4::glib::MainContext) {
+    let _ = GTK_CTX.set(ctx);
+}
+
+pub fn clear_wake_pending() {
+    WAKE_PENDING.store(false, Ordering::Release);
+}
+
+/// Coalesce bursts of service events into one GTK idle drain.
+pub fn wake_ui() {
+    if GTK_CTX.get().is_none() {
+        return;
+    }
+    if WAKE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if let Some(ctx) = GTK_CTX.get() {
+        ctx.invoke(|| {
+            gtk4::glib::idle_add_local_once(|| {
+                crate::app::pump_once();
+            });
+        });
+    }
+}
+
+/// Thread-safe event outlet. `send` wakes the GTK loop.
+#[derive(Clone)]
+pub struct EventTx {
+    inner: mpsc::Sender<Event>,
+}
+
+impl EventTx {
+    pub fn pair() -> (Self, mpsc::Receiver<Event>) {
+        let (tx, rx) = mpsc::channel();
+        (Self { inner: tx }, rx)
+    }
+
+    pub fn send(&self, ev: Event) {
+        if self.inner.send(ev).is_ok() {
+            wake_ui();
+        }
+    }
+}
 
 /// Events flowing from async services (tokio side) into the GTK main loop.
 #[derive(Debug, Clone)]

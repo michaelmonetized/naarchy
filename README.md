@@ -1,55 +1,80 @@
 # Naarchy
 
-Your notch is a shelf, a clipboard, a player, and a HUD.
+Your MacBook notch, on Linux. A shelf. A clipboard. A timer that takes over the
+screen when it hits zero.
 
-Native GTK4 on Omarchy / Hyprland. MIT. Not Electron.
+Native GTK4 on Omarchy / Hyprland. MIT. Not Electron. Not a blurry fog hanging
+off the camera. A black glass island that fills the hole and grows ears when
+something is live.
 
-Drop a file on the island. Copy something, Super+V, it's still there. Hover the
-top edge and a glass capsule grows out of the notch. That's the whole product.
+<video src="docs/recordings/island-demo.mp4" controls muted loop playsinline></video>
 
-![Home — timer, media, dock](docs/screenshots/03-expanded-home.png)
+[Watch the island move](docs/recordings/island-demo.mp4)
 
 <p align="center">
-  <img src="docs/screenshots/01-island-collapsed.png" alt="Collapsed island" />
-  <img src="docs/screenshots/02-island-timer.png" alt="Timer live activity" />
+  <img src="docs/screenshots/v0.3/strip-timer-live.jpg" alt="Timer live activity wrapping the camera" />
 </p>
 
-![Inbox](docs/screenshots/04-inbox.png)
-![Clipboard](docs/screenshots/05-clipboard.png)
-![Volume HUD](docs/screenshots/06-hud-volume.png)
+![Home — ruler timer, media, battery](docs/screenshots/v0.3/panel-home.jpg)
+
+![Inbox — drop a file, get a thumbnail grid](docs/screenshots/v0.3/panel-inbox.jpg)
+
+<p align="center">
+  <img src="docs/screenshots/v0.3/panel-timer-live.jpg" alt="Collapsed live timer" width="48%" />
+  <img src="docs/screenshots/v0.3/panel-clipboard.jpg" alt="Clipboard history" width="48%" />
+</p>
+
+![Calendar](docs/screenshots/v0.3/panel-calendar.jpg)
+
+## What it does
+
+Hover the top of the display. The island opens. Click it, or `Super+N`.
+
+- **Idle** fills the 16" M1 Pro camera hole: 370×67.
+- **Live** hangs 72px with ears. Timer countdown and a stacked file pile sit on
+  the glass, not in the webcam.
+- **Home** is a ruler timer (release to start, click to pause) and MPRIS media.
+- **Inbox** is a file shelf. Drag onto any tab. A dotted overlay fades in.
+  Release jumps you to Inbox with thumbs. Drag them back out into any app.
+- **Clipboard** is history you can search and pin. `Super+V`.
+- **Calendar** is the month plus today's agenda. ICS feeds if you want them.
+- **Timer done** is a fullscreen visual bell and a looping alarm until you click
+  it, hit a key, or dismiss.
+
+The expanded glass only eats clicks on the capsule and the dock. Everything else
+at the top of the screen stays yours. That is `set_input_region`, not a slogan.
 
 ## Install
 
 ```bash
 sudo pacman -S --needed gtk4 gtk4-layer-shell rust
+git clone https://github.com/michaelmonetized/naarchy
+cd naarchy
 cargo install --path . --locked
 ```
 
-Then either:
+Then:
 
 ```bash
-# recommended
 mkdir -p ~/.config/systemd/user
 cp contrib/naarchy.service ~/.config/systemd/user/
-# cargo-install: set ExecStart=%h/.cargo/bin/naarchy run in that file
+# cargo-install: ExecStart=%h/.cargo/bin/naarchy run
 systemctl --user daemon-reload
 systemctl --user enable --now naarchy.service
 ```
 
-or, for a one-shot from a terminal:
+Or, once, from a terminal: `naarchy run`.
 
-```bash
-naarchy run
-```
-
-Full deps, PKGBUILD, Asahi notch keys, and troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
+Full deps, PKGBUILD, Asahi notch keys, troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## First 60 seconds
 
-1. Hover the top-center of the screen. The island opens.
-2. `Super+N` toggles it. `Super+V` is clipboard. `Super+Shift+N` is the Inbox.
-3. Drop a file on the capsule. Drag it back out into any app.
-4. Paste this into Hyprland (or run `naarchy install-binds` and take what you want):
+1. Hover the top-center. The island opens.
+2. `Super+N` toggles. `Super+V` is clipboard. `Super+Shift+N` is Inbox.
+3. Drop a file on the capsule. Drag it back out.
+4. Scrub the timer ruler. Let go. It starts. Click to pause. When it hits zero
+   the screen takes over and the alarm loops until you dismiss it.
+5. Paste this into Hyprland (or run `naarchy install-binds`):
 
 ```
 exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP
@@ -57,34 +82,21 @@ layerrule = blur, naarchy
 layerrule = ignorealpha 0.2, naarchy
 ```
 
-Pick **one** autostart: systemd **or** the desktop file. Not both. Not `exec-once = naarchy`.
-
-## What you get
-
-- **Island / notch pill** — clock, battery, live activities (timer, now-playing, file count).
-- **Home** — timer and media widgets. Pin clock/battery from Widgets.
-- **Inbox** — file shelf. Persists. Drags out.
-- **Clipboard** — history, search, pin. Click to re-copy.
-- **Calendar** — month + today's agenda. Optional ICS feeds.
-- **HUDs** — `naarchy hud volume auto` from your volume binds.
-
-Physical notch (Asahi): `notch_mode = true` in `~/.config/naarchy/config.toml`.
+Pick **one** autostart: systemd **or** the desktop file. Not both. Not
+`exec-once = naarchy`.
 
 ## Config
 
-`~/.config/naarchy/config.toml` hot-reloads colors and sizes. Changing monitor
-selection or feature flags needs a restart.
+`~/.config/naarchy/config.toml` hot-reloads colors and sizes. Monitor list and
+feature flags need a restart.
+
+On a 16" M1 Pro at 3456×2234 scale 1, idle is 370×67 because that is the hole.
+Live hangs 72px. Override `pill_width_island` if your glass is different.
 
 Reference: [docs/CONFIG.md](docs/CONFIG.md) · CLI: [docs/CLI.md](docs/CLI.md) ·
 Theming: [docs/THEMING.md](docs/THEMING.md).
 
 Naarchy follows the active Omarchy theme unless you override it.
-
-## Clicks
-
-The expanded glass only takes clicks on the capsule and the dock. Everything
-else at the top of the screen stays yours. That is not a slogan. It is
-`set_input_region`.
 
 ## Privacy
 
@@ -93,7 +105,7 @@ feeds you listed. Socket is `$XDG_RUNTIME_DIR/naarchy.sock`, mode 600.
 
 ## License
 
-MIT. Copyright 2026 Michael C Hurley.
+MIT. Copyright 2026 Michael C. Hurley.
 
 Honest matrix vs Droppy / NotchNook / Boring.Notch: [docs/COMPARISON.md](docs/COMPARISON.md).
 Spec: [docs/SPEC.md](docs/SPEC.md).

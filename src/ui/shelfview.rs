@@ -37,7 +37,7 @@ impl ShelfPage {
         scroll.set_css_classes(&["na-scroll"]);
 
         let grid = FlowBox::new();
-        grid.set_max_children_per_line(5);
+        grid.set_max_children_per_line(4);
         grid.set_min_children_per_line(3);
         grid.set_homogeneous(true);
         grid.set_selection_mode(gtk4::SelectionMode::None);
@@ -104,7 +104,7 @@ fn tile(shared: &Rc<Shared>, item: ShelfItem) -> FlowBoxChild {
 
     let thumb_holder = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     thumb_holder.set_css_classes(&["na-shelf-thumb"]);
-    thumb_holder.set_size_request(72, 64);
+    thumb_holder.set_size_request(96, 80);
     thumb_holder.set_halign(gtk4::Align::Center);
     thumb_holder.set_overflow(gtk4::Overflow::Hidden);
     if item.kind == "image" || item.mime.starts_with("image/") {
@@ -112,7 +112,7 @@ fn tile(shared: &Rc<Shared>, item: ShelfItem) -> FlowBoxChild {
         if !item.path.is_empty() {
             if let Ok(tex) = gdk::Texture::from_filename(path) {
                 let pic = gtk4::Picture::for_paintable(&tex);
-                pic.set_size_request(72, 64);
+                pic.set_size_request(96, 80);
                 pic.set_content_fit(gtk4::ContentFit::Cover);
                 thumb_holder.append(&pic);
             } else {
@@ -131,7 +131,7 @@ fn tile(shared: &Rc<Shared>, item: ShelfItem) -> FlowBoxChild {
 
     let name = label(&["na-shelf-name"], &display_name(&item));
     name.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-    name.set_max_width_chars(12);
+    name.set_max_width_chars(14);
     name.set_single_line_mode(true);
     name.set_halign(gtk4::Align::Center);
     boxv.append(&name);

@@ -49,7 +49,6 @@ use gtk4::prelude::*;
 use gtk4::Orientation;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::mpsc::Sender;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -122,6 +121,11 @@ impl TimerState {
     pub fn running(&self) -> bool {
         self.paused_remaining.is_none() && self.remaining_secs() > 0
     }
+
+    /// True the first tick after the countdown hits zero.
+    pub fn just_finished(&self, done_until: u64) -> bool {
+        self.paused_remaining.is_none() && self.remaining_secs() == 0 && done_until == 0
+    }
 }
 
 pub fn now_secs() -> u64 {
@@ -150,10 +154,12 @@ pub struct Shared {
     pub cal_events: RefCell<Vec<crate::services::calendar::CalEvent>>,
     /// Show a transient "Done" state in the pill after a timer finishes.
     pub timer_done_until: Cell<u64>,
-    pub media_cmd: RefCell<Option<std::sync::mpsc::Sender<crate::services::mpris::MediaCmd>>>,
-    pub notif_cmd: RefCell<Option<std::sync::mpsc::Sender<crate::services::notifd::NotifCmd>>>,
+    pub media_cmd:
+        RefCell<Option<tokio::sync::mpsc::UnboundedSender<crate::services::mpris::MediaCmd>>>,
+    pub notif_cmd:
+        RefCell<Option<tokio::sync::mpsc::UnboundedSender<crate::services::notifd::NotifCmd>>>,
     /// UI-originated events (timer done, etc.) fed back into the event pump
-    pub ui_tx: RefCell<Option<Sender<crate::services::Event>>>,
+    pub ui_tx: RefCell<Option<crate::services::EventTx>>,
     /// App-level "expand all panels" closure, set once by app::run
     pub expand_all_cb: RefCell<Option<Box<dyn Fn()>>>,
     /// Cached palette to avoid per-frame omarchy file I/O (see theme::resolve)
@@ -188,23 +194,32 @@ impl Shared {
     }
 
     pub fn restyle(&self) {
-        // refresh cached palette first so draw funcs use fresh colors without file I/O
-        {
+        // Drop every RefCell guard before GTK applies CSS. Adding a provider
+        // redraws immediately; a live `cfg` borrow there is a SIGABRT.
+        let css = {
             let cfg = self.cfg.borrow();
             let pal = crate::theme::resolve(&cfg, self.dark.get());
             *self.cached_palette.borrow_mut() = pal;
+            crate::theme::build_css(&cfg, self.dark.get())
+        };
+        thread_local! {
+            static CSS: RefCell<Option<gtk4::CssProvider>> = const { RefCell::new(None) };
         }
-        let cfg = self.cfg.borrow();
-        let css = crate::theme::build_css(&cfg, self.dark.get());
-        let provider = gtk4::CssProvider::new();
-        provider.load_from_string(&css);
-        if let Some(display) = gdk::Display::default() {
-            gtk4::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-        }
+        CSS.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let provider = slot.get_or_insert_with(|| {
+                let p = gtk4::CssProvider::new();
+                if let Some(display) = gdk::Display::default() {
+                    gtk4::style_context_add_provider_for_display(
+                        &display,
+                        &p,
+                        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                    );
+                }
+                p
+            });
+            provider.load_from_string(&css);
+        });
     }
 
     pub fn palette(&self) -> crate::theme::Palette {
@@ -275,6 +290,50 @@ pub(crate) fn setup_layer_with(
 
 pub(crate) type Callback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
+/// Format a duration as `mm:ss`, or `h:mm:ss` once it crosses an hour.
 pub(crate) fn fmt_mmss(secs: u64) -> String {
-    format!("{:02}:{:02}", secs / 60, secs % 60)
+    if secs >= 3600 {
+        fmt_hms(secs)
+    } else {
+        format!("{:02}:{:02}", secs / 60, secs % 60)
+    }
+}
+
+/// Format a duration as `h:mm:ss` (matches the timer card).
+pub(crate) fn fmt_hms(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    format!("{h}:{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_hms, fmt_mmss, TimerState};
+
+    #[test]
+    fn hms_matches_the_card() {
+        assert_eq!(fmt_hms(0), "0:00:00");
+        assert_eq!(fmt_hms(290 * 60), "4:50:00");
+        assert_eq!(fmt_hms(65), "0:01:05");
+    }
+
+    #[test]
+    fn mmss_stays_compact_under_an_hour() {
+        assert_eq!(fmt_mmss(59), "00:59");
+        assert_eq!(fmt_mmss(1500), "25:00");
+        assert_eq!(fmt_mmss(3600), "1:00:00");
+    }
+
+    #[test]
+    fn running_is_false_at_zero_so_fire_must_not_use_it() {
+        let t = TimerState {
+            end_at: 0,
+            paused_remaining: None,
+            total: 30,
+        };
+        assert!(!t.running());
+        assert!(t.just_finished(0));
+        assert!(!t.just_finished(1));
+    }
 }

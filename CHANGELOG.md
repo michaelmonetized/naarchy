@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — stop crashing, stop spinning, look like a product
+
+- **Crash**: CSS restyle held a `RefCell` across a GTK redraw. That's a panic through C, which is SIGABRT. Drop the borrow before applying CSS. Reuse one `CssProvider`. Clone media state before mutating widgets. MPRIS proxies no longer `expect`.
+- **Idle CPU**: the UI polled mpsc at 16 ms forever. Services now wake GTK. Safety net is 400 ms. Hyprland cursorpos sleeps 140 ms unless the pointer is in the top 80 px. Clipboard 1500 ms, cheap hash. MPRIS 4 s, no position ticker (the seek bar is gone). One tokio runtime, kept alive on purpose.
+- **Draw**: island is 280×36 idle. Open state is a solid glass card (tight shadow + top sheen), not a hanging bloom. Pill hides while the panel is open so you don't get two islands.
+- **Timer**: Droppy-style minute ruler and big `h:mm:ss`. Release the ruler to start. Click it while running to pause, click again to resume. Done actually fires now (the old `remaining==0 && running()` check was impossible). Fullscreen takeover on a `naarchy-bell` layer (no Hyprland blur) plus a looping alarm until you click, tap a key, or hit Dismiss.
+- **Live activities**: idle fills the 16" M1 Pro hole at 370×67. Live hangs 72px tall with ears so the countdown sits on the glass, not in the camera.
+- **Drop**: GTK4 `GdkFileList` so Nautilus/Thunar drops land. Every tab accepts files; a dotted Inbox overlay fades in on hover. Release switches to Inbox with the thumbnail grid. Collapsed pill shows a stacked thumb pile + count.
+- **Clipboard**: delete image blobs on trim/remove. Cap unpinned images at 24.
+
 ## 0.2.5 — no clock, compact media, pause fix
 
 - **Clock**: you said clocks are everywhere — `WidgetStore::default` is `Timer+Media` and `src/widget_store.rs:71` now migrates existing `~/.config/naarchy/widgets.json` removing `Clock` (your file had `Timer,Media,Clock,Battery` → now `Timer,Media,Battery`). Drawer still has Clock if you ever want it, but Home won’t show it.

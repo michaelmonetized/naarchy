@@ -96,15 +96,43 @@ impl ClipStore {
             },
         );
 
-        // trim oldest unpinned entries beyond the cap (pins never trimmed)
+        let blobs = self.blobs_dir.clone();
+        let drop_img = |e: &crate::services::ClipEntry| {
+            if e.kind == crate::services::ClipKind::Image && !e.data_ref.is_empty() {
+                let _ = std::fs::remove_file(blobs.join(&e.data_ref));
+            }
+        };
+
+        let image_cap = 24.min(max_entries);
+        let image_count = self
+            .entries
+            .iter()
+            .filter(|e| e.kind == crate::services::ClipKind::Image && !e.pinned)
+            .count();
+        if image_count > image_cap {
+            let overflow = image_count - image_cap;
+            let mut removed = 0;
+            self.entries.reverse();
+            self.entries.retain(|e| {
+                if e.kind == crate::services::ClipKind::Image && !e.pinned && removed < overflow {
+                    drop_img(e);
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            self.entries.reverse();
+        }
+
         let unpinned_count = self.entries.iter().filter(|e| !e.pinned).count();
         let overflow = unpinned_count.saturating_sub(max_entries);
         if overflow > 0 {
-            // remove from the tail (oldest)
             let mut removed = 0;
             self.entries.reverse();
             self.entries.retain(|e| {
                 if !e.pinned && removed < overflow {
+                    drop_img(e);
                     removed += 1;
                     false
                 } else {
@@ -133,13 +161,25 @@ impl ClipStore {
     }
 
     pub fn remove(&mut self, id: &str) {
+        if let Some(e) = self.entries.iter().find(|e| e.id == id) {
+            self.drop_blob(e);
+        }
         self.entries.retain(|e| e.id != id);
         self.persist();
     }
 
     pub fn clear_unpinned(&mut self) {
+        for e in self.entries.iter().filter(|e| !e.pinned) {
+            self.drop_blob(e);
+        }
         self.entries.retain(|e| e.pinned);
         self.persist();
+    }
+
+    fn drop_blob(&self, e: &crate::services::ClipEntry) {
+        if e.kind == crate::services::ClipKind::Image && !e.data_ref.is_empty() {
+            let _ = std::fs::remove_file(self.blobs_dir.join(&e.data_ref));
+        }
     }
 
     pub fn blob_path(&self, r: &str) -> PathBuf {

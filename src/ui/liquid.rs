@@ -1,22 +1,24 @@
-//! Open-state backdrop: a notch-shaped bloom that hangs off the island.
+//! Open-state backdrop: a solid glass card that grows out of the island.
 //!
-//! No card, no hairline, no box. Black at the island, through the omarchy
-//! background, to transparent — fast falloff, dead before the window edge.
+//! Same silhouette as the closed pill (flush top, concave ears, rounded
+//! base). No hanging bloom, no fog. The card is the product; the rest of
+//! the layer-shell surface stays transparent so clicks fall through.
 
-use gtk4::cairo::{self, Context, RadialGradient};
+use gtk4::cairo::{self, Context, LinearGradient};
 use gtk4::gdk::prelude::*;
 use gtk4::prelude::*;
 
-/// Closed-island size. Match the 16" MacBook camera housing
-/// (narrower and taller than a Dynamic Island pancake).
-pub const NOTCH_W: f64 = 392.0;
-pub const NOTCH_H: f64 = 72.0;
+/// 16" MacBook Pro camera hole, measured on 3456×2234 @ scale 1: 370×67.
+/// Idle fills that hole. Live activities hang a few pixels below it.
+pub const NOTCH_W: f64 = 370.0;
+pub const NOTCH_H: f64 = 67.0;
+pub const LIVE_H: f64 = 72.0;
 
-/// Transparent gutter so the bloom never kisses the layer-shell rectangle.
+/// Transparent gutter so the card shadow never kisses the layer-shell rectangle.
 const EDGE_GUTTER: f64 = 40.0;
 
-/// Panel layer width relative to `appearance.panel_width` (veil hangs past content).
-pub const PANEL_WINDOW_SCALE: f64 = 1.75;
+/// Panel layer width relative to `appearance.panel_width` (gutter around the card).
+pub const PANEL_WINDOW_SCALE: f64 = 1.22;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Capsule {
@@ -59,7 +61,7 @@ pub fn geom(win_w: f64, win_h: f64, progress: f64, dock_reserve: f64) -> Capsule
     }
 }
 
-pub const DOCK_RESERVE: f64 = 78.0;
+pub const DOCK_RESERVE: f64 = 62.0;
 
 /// Append the island silhouette: top is the widest line (flush), concave
 /// ears, inset walls, convex bottom that pulls in.
@@ -102,15 +104,28 @@ fn quad_to(cr: &Context, sx: f64, sy: f64, cx: f64, cy: f64, ex: f64, ey: f64) {
 }
 
 pub fn notch_radii() -> (f64, f64) {
-    let top_r = (NOTCH_H * 0.16).clamp(8.0, 14.0);
-    let bot_r = (NOTCH_H * 0.24).clamp(10.0, 18.0).min(NOTCH_H * 0.32);
+    notch_radii_for(NOTCH_H)
+}
+
+pub fn notch_radii_for(h: f64) -> (f64, f64) {
+    let top_r = (h * 0.16).clamp(8.0, 22.0);
+    let bot_r = (h * 0.28).clamp(10.0, 26.0).min(h * 0.36);
     (top_r, bot_r)
 }
 
-/// Paint the open-state bloom.
+/// Corner radii for the open card. Starts at the closed-pill ears and
+/// grows toward a Droppy-style even radius as the capsule gets taller.
+pub fn card_radii(w: f64, h: f64) -> (f64, f64) {
+    let (nrt, nrb) = notch_radii();
+    let t = ((h - NOTCH_H) / 140.0).clamp(0.0, 1.0);
+    let r = (h * 0.08).clamp(16.0, 28.0).min(w * 0.08);
+    (nrt + (r - nrt) * t, nrb + (r - nrb) * t)
+}
+
+/// Paint the open-state card.
 ///
-/// `fill` is the omarchy background the shadow passes through. `alpha` scales
-/// the whole effect (no floor — a floor was painting a visible card).
+/// `fill` tints the otherwise-black island so an omarchy background still
+/// shows through a hair. `alpha` scales the whole card (no floor).
 pub fn draw(cr: &Context, cap: Capsule, fill: (u8, u8, u8), alpha: f64) {
     if cap.w < 4.0 || cap.h < 4.0 {
         return;
@@ -121,102 +136,40 @@ pub fn draw(cr: &Context, cap: Capsule, fill: (u8, u8, u8), alpha: f64) {
         fill.2 as f64 / 255.0,
     );
     let gain = alpha.clamp(0.0, 1.0);
-    let (rt, rb) = notch_radii();
+    let (rt, rb) = card_radii(cap.w, cap.h);
 
-    let nw = NOTCH_W.min(cap.w.max(8.0));
-    let nh = NOTCH_H.min(cap.h.max(8.0));
-    let nx = cap.x + (cap.w - nw) * 0.5;
-    let ny = cap.y;
-    let cx = nx + nw * 0.5;
-
-    // Droppy-scale veil: dense under the island, through the theme across
-    // the content, then a cliff to transparent *inside* `cap` so the
-    // layer-shell rectangle never reads as an edge.
-    //
-    // Plateau then crash — large, not a 40px smudge.
-    let falloff = |t: f64| -> f64 {
-        let t = t.clamp(0.0, 1.0);
-        let cliff = ((t - 0.52) / 0.48).clamp(0.0, 1.0);
-        (1.0 - t * 0.22) * (1.0 - cliff).powi(3)
-    };
-
-    let cy = ny + nh * 0.40;
-    // Wide and shallow — window is 1.75× content; bloom is a squat veil.
-    const BLOOM_H: f64 = 0.50;
-    let rx = ((cx - cap.x).min(cap.x + cap.w - cx)).max(8.0);
-    let ry = ((cap.y + cap.h - cy) * BLOOM_H).max(8.0);
-    let _ = cr.save();
-    cr.translate(cx, cy);
-    cr.scale(rx, ry);
-    let wash = RadialGradient::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
-    wash.add_color_stop_rgba(0.00, 0.0, 0.0, 0.0, 0.96 * gain);
-    wash.add_color_stop_rgba(0.12, 0.0, 0.0, 0.0, 0.84 * gain);
-    wash.add_color_stop_rgba(0.28, 0.0, 0.0, 0.0, 0.62 * gain);
-    wash.add_color_stop_rgba(0.48, 0.0, 0.0, 0.0, 0.34 * gain);
-    wash.add_color_stop_rgba(0.64, tr, tg, tb, 0.16 * gain);
-    wash.add_color_stop_rgba(0.82, tr, tg, tb, 0.04 * gain);
-    wash.add_color_stop_rgba(1.00, tr, tg, tb, 0.0);
-    cr.arc(0.0, 0.0, 1.0, 0.0, std::f64::consts::TAU);
-    cr.clip();
-    let _ = cr.set_source(&wash);
-    let _ = cr.paint();
-    let _ = cr.restore();
-
-    // Notch-following umbra. Grows farther *down* than sideways — a pool
-    // hanging off the island, still inside the gutter. Stay black for most
-    // of the radius; mix to theme only on the cliff so a dark desktop
-    // still shows a Droppy-sized veil.
-    let pad_x = ((cap.w - nw) * 0.5 * 0.92).max(0.0);
-    let pad_y = ((cap.h - nh) * 0.90 * BLOOM_H).max(0.0);
-    const COPIES: i32 = 18;
-    for i in (1..=COPIES).rev() {
-        let t = i as f64 / COPIES as f64;
-        let fade = falloff(t);
-        if fade < 0.015 {
-            continue;
-        }
-        let mix = ((t - 0.50) / 0.38).clamp(0.0, 1.0);
-        let mix = mix * mix;
-        let a = (0.28 * fade * gain).min(0.50);
-        let px = pad_x * t;
-        let py = pad_y * t;
+    for (oy, grow, a) in [(10.0, 8.0, 0.22), (4.0, 3.0, 0.14)] {
         path_notch(
             cr,
-            nx - px,
-            ny,
-            nw + px * 2.0,
-            nh + py,
-            rt + px * 0.10,
-            rb + py * 0.08,
+            cap.x - grow * 0.35,
+            cap.y,
+            cap.w + grow * 0.7,
+            cap.h + oy,
+            (rt + grow * 0.08).min(cap.w * 0.4),
+            (rb + grow * 0.18).min(cap.h * 0.4),
         );
-        cr.set_source_rgba(tr * mix, tg * mix, tb * mix, a);
+        cr.set_source_rgba(0.0, 0.0, 0.0, a * gain);
         let _ = cr.fill();
     }
 
-    // Stroke on the true island path — the silhouette of the drop.
-    let max_stroke = (pad_x.min(pad_y) * 1.6).max(0.0);
-    if max_stroke > 2.0 {
-        cr.set_line_join(cairo::LineJoin::Round);
-        cr.set_line_cap(cairo::LineCap::Round);
-        const LAYERS: i32 = 8;
-        for i in (1..=LAYERS).rev() {
-            let t = i as f64 / LAYERS as f64;
-            let fade = falloff(t);
-            if fade < 0.02 {
-                continue;
-            }
-            let mix = ((t - 0.50) / 0.38).clamp(0.0, 1.0);
-            let mix = mix * mix;
-            path_notch(cr, nx, ny, nw, nh, rt, rb);
-            cr.set_source_rgba(tr * mix, tg * mix, tb * mix, (fade * 0.28 * gain).min(0.45));
-            cr.set_line_width(max_stroke * t);
-            let _ = cr.stroke();
-        }
-    }
-
-    path_notch(cr, nx, ny, nw, nh, rt, rb);
-    cr.set_source_rgb(0.0, 0.0, 0.0);
+    path_notch(cr, cap.x, cap.y, cap.w, cap.h, rt, rb);
+    cr.set_source_rgba(
+        tr * 0.10,
+        tg * 0.10,
+        tb * 0.10,
+        (0.96 * gain).clamp(0.0, 1.0),
+    );
     let _ = cr.fill();
+
+    let _ = cr.save();
+    path_notch(cr, cap.x, cap.y, cap.w, cap.h, rt, rb);
+    cr.clip();
+    let sheen = LinearGradient::new(cap.x, cap.y, cap.x, cap.y + 20.0);
+    sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.07 * gain);
+    sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+    let _ = cr.set_source(&sheen);
+    let _ = cr.paint();
+    let _ = cr.restore();
 }
 
 /// Restrict pointer hits to the capsule + dock so empty glass around them
@@ -279,5 +232,22 @@ mod tests {
         assert!(c.x >= 0.0);
         assert!(c.x + c.w <= 400.0 + 0.01);
         assert!(c.h < 300.0);
+    }
+
+    #[test]
+    fn card_radii_grow_with_the_capsule() {
+        let (a, b) = card_radii(NOTCH_W, NOTCH_H);
+        let (c, d) = card_radii(680.0, 400.0);
+        assert!(c > a);
+        assert!(d > b);
+        assert!(c <= 28.0);
+    }
+
+    #[test]
+    fn live_hangs_below_the_hole() {
+        assert_eq!(NOTCH_W, 370.0);
+        assert_eq!(NOTCH_H, 67.0);
+        assert_eq!(LIVE_H, 72.0);
+        assert!(LIVE_H > NOTCH_H);
     }
 }

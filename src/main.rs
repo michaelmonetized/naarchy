@@ -19,7 +19,7 @@ struct Startup {
     cfg: Config,
     event_rx: mpsc::Receiver<Event>,
     verb_rx: mpsc::Receiver<Verb>,
-    event_tx: mpsc::Sender<Event>,
+    event_tx: services::EventTx,
 }
 
 static STARTUP: std::sync::Mutex<Option<Startup>> = std::sync::Mutex::new(None);
@@ -317,7 +317,7 @@ fn start_daemon() {
     Config::save_default_if_missing(&cfg_path);
     let cfg = Config::load(&cfg_path);
 
-    let (event_tx, event_rx) = mpsc::channel::<Event>();
+    let (event_tx, event_rx) = services::EventTx::pair();
     let (verb_tx, verb_rx) = mpsc::channel::<Verb>();
 
     {
@@ -329,20 +329,26 @@ fn start_daemon() {
                 let mut line = String::new();
                 if reader.read_line(&mut line).is_ok() {
                     if let Ok(v) = serde_json::from_str::<Verb>(&line) {
-                        let _ = vt.send(v);
+                        if vt.send(v).is_ok() {
+                            services::wake_ui();
+                        }
                     }
                 }
             }
         });
     }
 
-    // Services on a tokio runtime thread
+    // One tokio runtime for every zbus/ICS task. Keep it alive with pending().
     {
         let tx = event_tx.clone();
+        let feeds = cfg.calendar.feeds.clone();
+        let refresh = cfg.calendar.refresh_min;
+        let want_notif = cfg.features.notifications;
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
+            let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
+                .max_blocking_threads(2)
+                .thread_name("naarchy-io")
                 .build()
                 .expect("tokio runtime");
             rt.block_on(async move {
@@ -371,12 +377,20 @@ fn start_daemon() {
                     });
                 }
 
-                // Notification daemon (optional; skipped when name taken or disabled)
-                if Config::load(&util::config_file()).features.notifications {
+                if !feeds.is_empty() {
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        services::calendar::run(tx, feeds, refresh).await;
+                    });
+                }
+
+                if want_notif {
                     if let Ok(cmd_tx) = services::notifd::run(tx).await {
                         *NOTIF_CMD.lock().unwrap() = Some(cmd_tx);
                     }
                 }
+
+                std::future::pending::<()>().await;
             });
         });
     }
@@ -398,7 +412,7 @@ fn start_daemon() {
                 .appearance
                 .pill_width_island
                 .max(ui::liquid::NOTCH_W as i32) as f64,
-            pill_h: ui::liquid::NOTCH_H,
+            pill_h: ui::liquid::LIVE_H,
             panel_w: cfg.appearance.panel_width as f64 * ui::liquid::PANEL_WINDOW_SCALE,
             panel_h: cfg.appearance.panel_height as f64,
         };
@@ -412,17 +426,9 @@ fn start_daemon() {
             let (ctx, crx) = mpsc::channel::<Config>();
             let _watcher = config::ConfigWatcher::spawn(cfg_path, ctx);
             while let Ok(new_cfg) = crx.recv() {
-                let _ = tx.send(Event::ConfigChanged(Box::new(new_cfg)));
+                tx.send(Event::ConfigChanged(Box::new(new_cfg)));
             }
         });
-    }
-
-    // Calendar ICS feed refresher
-    {
-        let tx = event_tx.clone();
-        let feeds = cfg.calendar.feeds.clone();
-        let refresh = cfg.calendar.refresh_min;
-        services::calendar::spawn(tx, feeds, refresh);
     }
 
     // GTK application
@@ -452,10 +458,12 @@ fn start_daemon() {
     let _ = std::fs::remove_file(sock_path());
 }
 
-static MEDIA_CMD: std::sync::Mutex<Option<mpsc::Sender<services::mpris::MediaCmd>>> =
-    std::sync::Mutex::new(None);
-static NOTIF_CMD: std::sync::Mutex<Option<mpsc::Sender<services::notifd::NotifCmd>>> =
-    std::sync::Mutex::new(None);
+static MEDIA_CMD: std::sync::Mutex<
+    Option<tokio::sync::mpsc::UnboundedSender<services::mpris::MediaCmd>>,
+> = std::sync::Mutex::new(None);
+static NOTIF_CMD: std::sync::Mutex<
+    Option<tokio::sync::mpsc::UnboundedSender<services::notifd::NotifCmd>>,
+> = std::sync::Mutex::new(None);
 
 fn print_binds() {
     println!(

@@ -1,9 +1,11 @@
 use super::motion::{self, Spring};
 use crate::services::Banner;
+use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{glib, ApplicationWindow, DrawingArea, Label};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Instant;
 
 pub struct HudManager {
     pub app: glib::WeakRef<gtk4::Application>,
@@ -13,6 +15,8 @@ pub struct HudManager {
     timeout: Rc<Cell<Option<glib::SourceId>>>,
     tick: Rc<Cell<Option<gtk4::TickCallbackId>>>,
     banners: Vec<ApplicationWindow>,
+    bells: Vec<ApplicationWindow>,
+    bell_src: Rc<Cell<Option<glib::SourceId>>>,
 }
 
 impl HudManager {
@@ -25,6 +29,8 @@ impl HudManager {
             timeout: Rc::new(Cell::new(None)),
             tick: Rc::new(Cell::new(None)),
             banners: Vec::new(),
+            bells: Vec::new(),
+            bell_src: Rc::new(Cell::new(None)),
         }
     }
 
@@ -141,6 +147,55 @@ impl HudManager {
                     );
                 }
             });
+        }
+    }
+
+    /// Full-screen visual bell on every monitor. Click or any key dismisses
+    /// the timer (and this overlay).
+    pub fn ring_bell(&mut self) {
+        self.silence_bell();
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
+        let n = display.monitors().n_items();
+        let started = Instant::now();
+        let areas: Rc<RefCell<Vec<DrawingArea>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut grabbed = false;
+        for i in 0..n {
+            let Some(m) = display.monitors().item(i).and_downcast::<gdk::Monitor>() else {
+                continue;
+            };
+            let grab = !grabbed;
+            grabbed = true;
+            let (win, area) = make_bell_window(&app, Some(&m), started, grab);
+            areas.borrow_mut().push(area);
+            self.bells.push(win);
+        }
+        if self.bells.is_empty() {
+            let (win, area) = make_bell_window(&app, None, started, true);
+            areas.borrow_mut().push(area);
+            self.bells.push(win);
+        }
+        let src_slot = self.bell_src.clone();
+        let areas2 = areas.clone();
+        let src = glib::timeout_add_local(std::time::Duration::from_millis(32), move || {
+            for a in areas2.borrow().iter() {
+                a.queue_draw();
+            }
+            glib::ControlFlow::Continue
+        });
+        src_slot.set(Some(src));
+    }
+
+    pub fn silence_bell(&mut self) {
+        if let Some(src) = self.bell_src.take() {
+            src.remove();
+        }
+        for w in self.bells.drain(..) {
+            w.close();
         }
     }
 
@@ -342,7 +397,7 @@ pub fn make_banner_window(
     card.set_margin_bottom(6);
 
     let head = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-    let ic = super::label(&[""], "🔔");
+    let ic = super::label(&["na-glyph"], super::g::INBOX);
     let sum = super::label(&["na-title"], &b.summary);
     sum.set_ellipsize(gtk4::pango::EllipsizeMode::End);
     let sp = super::label(&[""], "");
@@ -405,6 +460,91 @@ pub fn make_banner_window(
     card.add_controller(click);
 
     (win, card)
+}
+
+fn make_bell_window(
+    app: &gtk4::Application,
+    monitor: Option<&gdk::Monitor>,
+    started: Instant,
+    grab_keyboard: bool,
+) -> (ApplicationWindow, DrawingArea) {
+    let win = ApplicationWindow::builder()
+        .application(app)
+        .title("naarchy-bell")
+        .decorated(false)
+        .resizable(true)
+        .build();
+    use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+    win.init_layer_shell();
+    win.set_layer(Layer::Overlay);
+    win.set_anchor(Edge::Top, true);
+    win.set_anchor(Edge::Bottom, true);
+    win.set_anchor(Edge::Left, true);
+    win.set_anchor(Edge::Right, true);
+    win.set_exclusive_zone(-1);
+    win.set_monitor(monitor);
+    // Own namespace so Hyprland's `layerrule = blur, naarchy` does not
+    // eat the takeover into a fog.
+    win.set_namespace(Some("naarchy-bell"));
+    win.set_keyboard_mode(if grab_keyboard {
+        KeyboardMode::Exclusive
+    } else {
+        KeyboardMode::OnDemand
+    });
+    win.add_css_class("naarchy");
+
+    let area = DrawingArea::new();
+    area.set_hexpand(true);
+    area.set_vexpand(true);
+    area.set_draw_func(move |_da, cr, w, h| {
+        let t = started.elapsed().as_secs_f64();
+        let a = bell_alpha(t);
+        cr.set_source_rgba(1.0, 0.97, 0.92, a);
+        let _ = cr.paint();
+        let label = "Time's up";
+        cr.select_font_face(
+            "sans",
+            gtk4::cairo::FontSlant::Normal,
+            gtk4::cairo::FontWeight::Bold,
+        );
+        cr.set_font_size((h as f64 * 0.08).clamp(28.0, 72.0));
+        cr.set_source_rgba(0.07, 0.07, 0.08, (a * 1.15).clamp(0.0, 1.0));
+        if let Ok(e) = cr.text_extents(label) {
+            cr.move_to(
+                w as f64 * 0.5 - e.width() / 2.0 - e.x_bearing(),
+                h as f64 * 0.5 - e.height() / 2.0 - e.y_bearing(),
+            );
+            let _ = cr.show_text(label);
+        }
+    });
+    win.set_child(Some(&area));
+
+    let click = gtk4::GestureClick::new();
+    click.connect_released(move |_g, _n, _x, _y| {
+        crate::app::dismiss_timer();
+    });
+    win.add_controller(click);
+
+    let key = gtk4::EventControllerKey::new();
+    key.connect_key_pressed(move |_k, _keyval, _code, _mod| {
+        crate::app::dismiss_timer();
+        gtk4::glib::Propagation::Stop
+    });
+    win.add_controller(key);
+
+    win.present();
+    (win, area)
+}
+
+/// Visual-bell envelope: slam on, then a hard strobe, then a slower pulse.
+fn bell_alpha(t: f64) -> f64 {
+    if t < 0.06 {
+        0.94
+    } else if t < 3.0 {
+        0.22 + 0.72 * (t * std::f64::consts::PI * 8.0).sin().abs()
+    } else {
+        0.28 + 0.52 * ((t * 2.2).sin().abs())
+    }
 }
 
 fn strip_markup(s: &str) -> String {

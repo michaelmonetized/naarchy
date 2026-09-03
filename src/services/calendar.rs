@@ -3,10 +3,9 @@
 
 use crate::timefmt;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use crate::services::Event;
+use crate::services::{Event, EventTx};
 
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
@@ -67,34 +66,15 @@ fn fetch(url: &str) -> Option<String> {
 
 /// Background service: refresh feeds every `refresh_min`, then emit
 /// `Event::CalendarReload` so the UI re-renders.
-pub struct CalendarHandle {
-    #[allow(dead_code)]
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-pub fn spawn(tx: Sender<Event>, feeds: Vec<String>, refresh_min: u64) -> CalendarHandle {
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+pub async fn run(tx: EventTx, feeds: Vec<String>, refresh_min: u64) {
     if feeds.is_empty() {
-        return CalendarHandle { stop };
+        return;
     }
-    let stop2 = stop.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            loop {
-                if stop2.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                refresh_feeds(&feeds).await;
-                let _ = tx.send(Event::CalendarReload);
-                tokio::time::sleep(Duration::from_secs(refresh_min.clamp(1, 1440) * 60)).await;
-            }
-        });
-    });
-    CalendarHandle { stop }
+    loop {
+        refresh_feeds(&feeds).await;
+        tx.send(Event::CalendarReload);
+        tokio::time::sleep(Duration::from_secs(refresh_min.clamp(1, 1440) * 60)).await;
+    }
 }
 
 /// Read every cached feed and return today's meetings, newest source last wins.

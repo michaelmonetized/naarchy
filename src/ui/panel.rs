@@ -43,7 +43,7 @@ impl PanelUi {
             let c = shared.cfg.borrow();
             (c.appearance.panel_width, c.appearance.panel_height)
         };
-        // Bloom is 75% wider than the content card; extra width is veil only.
+        // Extra width is gutter around the card so the shadow doesn't clip.
         let w = ((content_w as f64) * super::liquid::PANEL_WINDOW_SCALE).round() as i32;
 
         let win = ApplicationWindow::builder()
@@ -221,10 +221,26 @@ impl PanelUi {
         shell.append(&content);
         shell.append(&dock_wrap);
 
-        let drop_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        let drop_box = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
         drop_box.set_css_classes(&["na-drop-veil"]);
         drop_box.set_hexpand(true);
         drop_box.set_vexpand(true);
+        drop_box.set_halign(gtk4::Align::Fill);
+        drop_box.set_valign(gtk4::Align::Fill);
+        drop_box.set_homogeneous(false);
+        {
+            let inner = super::vbox(8);
+            inner.set_halign(gtk4::Align::Center);
+            inner.set_valign(gtk4::Align::Center);
+            inner.set_vexpand(true);
+            let ic = label(&["na-widget-glyph", "lg"], g::INBOX);
+            ic.set_halign(gtk4::Align::Center);
+            let hint = label(&["na-drop-veil-label"], "Drop to Inbox");
+            hint.set_halign(gtk4::Align::Center);
+            inner.append(&ic);
+            inner.append(&hint);
+            drop_box.append(&inner);
+        }
         let drop_revealer = gtk4::Revealer::new();
         drop_revealer.set_transition_type(gtk4::RevealerTransitionType::Crossfade);
         drop_revealer.set_transition_duration(180);
@@ -232,12 +248,12 @@ impl PanelUi {
         drop_revealer.set_can_target(false);
         drop_revealer.set_hexpand(true);
         drop_revealer.set_vexpand(true);
-        drop_revealer.set_halign(gtk4::Align::Center);
-        drop_revealer.set_width_request(content_w);
-        drop_revealer.set_margin_top(super::liquid::NOTCH_H as i32 + 8);
+        drop_revealer.set_halign(gtk4::Align::Fill);
+        drop_revealer.set_valign(gtk4::Align::Fill);
+        drop_revealer.set_margin_top((super::liquid::NOTCH_H as i32) + 10);
         drop_revealer.set_margin_bottom(DOCK_RESERVE as i32);
-        drop_revealer.set_margin_start(24);
-        drop_revealer.set_margin_end(24);
+        drop_revealer.set_margin_start(28);
+        drop_revealer.set_margin_end(28);
         drop_revealer.set_child(Some(&drop_box));
 
         let overlay = gtk4::Overlay::new();
@@ -246,6 +262,12 @@ impl PanelUi {
         overlay.add_overlay(&drop_revealer);
         win.set_child(Some(&overlay));
         attach_file_drop(&win);
+        attach_file_drop(home_page.root());
+        attach_file_drop(shelf_page.root());
+        attach_file_drop(clip_page.root());
+        attach_file_drop(drawer_page.root());
+        attach_file_drop(cal_page.root());
+        attach_file_drop(&drop_box);
 
         {
             let key = gtk4::EventControllerKey::new();
@@ -312,6 +334,7 @@ impl PanelUi {
             self.target.set(1.0);
             self.start_anim();
         });
+        crate::app::show_pills(false);
     }
 
     pub fn collapse(&self) {
@@ -337,6 +360,7 @@ impl PanelUi {
 
     pub fn set_drop_veil(&self, on: bool) {
         self.drop_revealer.set_reveal_child(on);
+        self.drop_revealer.set_can_target(on);
     }
 
     pub fn schedule_collapse_if_unhovered(&self) {
@@ -392,7 +416,6 @@ impl PanelUi {
             let d_op = motion::dock_opacity(p);
             dock.set_opacity(d_op);
             dock_wrap.set_opacity(d_op);
-            dock.set_margin_bottom(motion::lerp(-8.0, 0.0, d_op) as i32);
 
             // throttle input region updates to ~20Hz to avoid per-frame layout + Wayland round-trip
             let f = frame.get().wrapping_add(1);
@@ -422,6 +445,7 @@ impl PanelUi {
                     liquid::clear_input_region(&win);
                     win.set_visible(false);
                     super::with_shared(|sh| sh.expanded.set(false));
+                    crate::app::show_pills(true);
                 } else {
                     let ww = win.width().max(1) as f64;
                     let wh = win.height().max(1) as f64;
@@ -482,11 +506,14 @@ fn tab_name(t: Tab) -> &'static str {
 
 fn file_drop_formats() -> gdk::ContentFormats {
     gdk::ContentFormats::builder()
+        .add_type(gdk::FileList::static_type())
         .add_type(gdk::Texture::static_type())
         .add_mime_type("text/uri-list")
         .add_mime_type("text/plain;charset=utf-8")
         .add_mime_type("text/plain")
         .add_mime_type("image/png")
+        .add_mime_type("image/jpeg")
+        .add_mime_type("image/webp")
         .build()
 }
 
@@ -500,6 +527,7 @@ pub(crate) fn attach_file_drop(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
         crate::app::drop_hover(true);
         gdk::DragAction::COPY
     });
+    dt.connect_motion(move |_dt, _x, _y| gdk::DragAction::COPY);
     dt.connect_leave(move |_dt| {
         crate::app::drop_hover(false);
     });
@@ -512,6 +540,22 @@ pub(crate) fn attach_file_drop(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
 
 /// Interpret a dropped GDK Value and store it on the shelf.
 pub(crate) fn handle_dropped_value(shared: &Rc<Shared>, value: &glib::Value) {
+    if let Ok(list) = value.get::<gdk::FileList>() {
+        for f in list.files() {
+            if let Some(p) = f.path() {
+                shared.shelf.borrow_mut().add_file(&p.to_string_lossy());
+            } else {
+                let uri = f.uri();
+                if let Some(rest) = uri.strip_prefix("file://") {
+                    shared.shelf.borrow_mut().add_file(&uri_unescape(rest));
+                } else if !uri.is_empty() {
+                    shared.shelf.borrow_mut().add_text(&uri);
+                }
+            }
+        }
+        crate::app::refresh_after_shelf_change();
+        return;
+    }
     if let Ok(tex) = value.get::<gdk::Texture>() {
         let tmp = std::env::temp_dir().join(format!("naarchy-drop-{}.png", std::process::id()));
         if tex.save_to_png(&tmp).is_ok() {

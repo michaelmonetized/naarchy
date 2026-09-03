@@ -7,7 +7,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 
 pub struct App {
     pub shared: Rc<Shared>,
@@ -18,6 +18,7 @@ pub struct App {
 
 thread_local! {
     static APP: RefCell<Option<Rc<App>>> = const { RefCell::new(None) };
+    static PUMP: RefCell<Option<(Receiver<Event>, Receiver<Verb>)>> = const { RefCell::new(None) };
 }
 
 pub fn with_app<R>(f: impl FnOnce(&Rc<App>) -> R) -> Option<R> {
@@ -97,16 +98,21 @@ pub fn drop_hover(on: bool) {
     });
 }
 
-/// Drop completed: park in the Inbox and show it.
+/// Drop completed: park in the Inbox, switch to it, keep the island open.
 pub fn drop_commit(value: &gtk4::glib::Value) {
     with_app(|app| {
         IGNORE_DROP_LEAVE.with(|c| c.set(true));
         crate::ui::panel::handle_dropped_value(&app.shared, value);
         app.shared.tab.set(crate::ui::Tab::Inbox);
         for p in app.panels.borrow().iter() {
+            p.expand();
             p.show_tab(crate::ui::Tab::Inbox);
+            p.shelf_reload();
             p.set_drop_veil(false);
             p.note_pointer(true);
+        }
+        for p in app.pills.borrow().iter() {
+            p.tick();
         }
     });
 }
@@ -143,6 +149,31 @@ pub fn flash_pills() {
     });
 }
 
+/// Full-screen visual bell on every monitor.
+pub fn ring_bell() {
+    with_app(|app| app.huds.borrow_mut().ring_bell());
+}
+
+pub fn silence_bell() {
+    with_app(|app| app.huds.borrow_mut().silence_bell());
+}
+
+/// Clear the timer, kill the alarm, drop the visual bell.
+pub fn dismiss_timer() {
+    with_app(|app| {
+        *app.shared.timer.borrow_mut() = None;
+        app.shared.timer_done_until.set(0);
+        crate::chime::alarm_stop();
+        app.huds.borrow_mut().silence_bell();
+        for p in app.pills.borrow().iter() {
+            p.tick();
+        }
+        for p in app.panels.borrow().iter() {
+            p.tick();
+        }
+    });
+}
+
 pub fn refresh_clips() {
     with_app(|app| {
         for p in app.panels.borrow().iter() {
@@ -154,7 +185,7 @@ pub fn refresh_clips() {
 pub fn notify_ui(summary: &str, body: &str) {
     with_app(|app| {
         if let Some(tx) = app.shared.ui_tx.borrow().as_ref() {
-            let _ = tx.send(Event::Notify(Banner {
+            tx.send(Event::Notify(Banner {
                 id: u32::MAX - 1,
                 app_name: "naarchy".into(),
                 icon: String::new(),
@@ -167,14 +198,50 @@ pub fn notify_ui(summary: &str, body: &str) {
     });
 }
 
+pub fn show_pills(on: bool) {
+    with_app(|app| {
+        if app.shared.fullscreen_hide.get() {
+            return;
+        }
+        for p in app.pills.borrow().iter() {
+            p.win.set_visible(on);
+        }
+    });
+}
+
+/// Drain queued service/CLI events. Called from a GTK idle source.
+pub fn pump_once() {
+    services::clear_wake_pending();
+    let mut events = Vec::new();
+    let mut verbs = Vec::new();
+    PUMP.with(|slot| {
+        if let Some((erx, vrx)) = slot.borrow_mut().as_mut() {
+            while let Ok(ev) = erx.try_recv() {
+                events.push(ev);
+            }
+            while let Ok(v) = vrx.try_recv() {
+                verbs.push(v);
+            }
+        }
+    });
+    with_app(|app| {
+        for ev in events {
+            handle_event(app, ev);
+        }
+        for v in verbs {
+            handle_verb(app, v);
+        }
+    });
+}
+
 pub fn run(
     app: &gtk4::Application,
     cfg: Config,
     events_rx: Receiver<Event>,
     verb_rx: Receiver<Verb>,
-    event_tx: Sender<Event>,
-    media_cmd: Option<Sender<services::mpris::MediaCmd>>,
-    notif_cmd: Option<Sender<services::notifd::NotifCmd>>,
+    event_tx: services::EventTx,
+    media_cmd: Option<tokio::sync::mpsc::UnboundedSender<services::mpris::MediaCmd>>,
+    notif_cmd: Option<tokio::sync::mpsc::UnboundedSender<services::notifd::NotifCmd>>,
 ) {
     let shared = Shared::new(cfg);
     crate::ui::SHARED.with(|s| *s.borrow_mut() = Some(shared.clone()));
@@ -205,45 +272,22 @@ pub fn run(
     }
 
     APP.with(|slot| *slot.borrow_mut() = Some(a.clone()));
+    PUMP.with(|slot| *slot.borrow_mut() = Some((events_rx, verb_rx)));
+    services::install_wake(glib::MainContext::default());
+    pump_once();
 
-    // Build surfaces per monitor
     build_surfaces(&a, app);
 
-    // Event pump — drain mpsc channels on a short timeout rather than a
-    // busy `idle` source. `DEFAULT_IDLE` busy-loops while the queue is empty
-    // and kept the CPU awake 1000s/sec even when idle.
-    {
-        let a2 = a.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-            let mut did_work = false;
-            for _ in 0..12 {
-                match events_rx.try_recv() {
-                    Ok(ev) => {
-                        handle_event(&a2, ev);
-                        did_work = true;
-                    }
-                    Err(_) => break,
-                }
-            }
-            for _ in 0..8 {
-                match verb_rx.try_recv() {
-                    Ok(v) => {
-                        handle_verb(&a2, v);
-                        did_work = true;
-                    }
-                    Err(_) => break,
-                }
-            }
-            // keep polling; timeout guarantees ~60Hz max, not busy-loop
-            let _ = did_work;
-            glib::ControlFlow::Continue
-        });
-    }
+    glib::timeout_add_local(std::time::Duration::from_millis(400), || {
+        pump_once();
+        glib::ControlFlow::Continue
+    });
 
-    // One-second tick: clock, media slider interpolation, timer
+    // One-second tick: clock, timer fire, live activities
     {
         let a3 = a.clone();
         glib::timeout_add_seconds_local(1, move || {
+            tick_timer(&a3);
             for p in a3.pills.borrow().iter() {
                 p.tick();
             }
@@ -252,6 +296,32 @@ pub fn run(
             }
             glib::ControlFlow::Continue
         });
+    }
+}
+
+/// Ring the alarm the first second the countdown hits zero.
+fn tick_timer(app: &Rc<App>) {
+    let now = crate::ui::now_secs();
+    let due = app
+        .shared
+        .timer
+        .borrow()
+        .as_ref()
+        .is_some_and(|t| t.just_finished(app.shared.timer_done_until.get()));
+    if due {
+        app.shared.timer_done_until.set(now + 60);
+        crate::chime::alarm_start();
+        request_collapse_all();
+        ring_bell();
+        flash_pills();
+        notify_ui("Timer done", "Time is up — click the flash to dismiss.");
+    }
+    let done = app.shared.timer_done_until.get();
+    if done > 0 && now >= done {
+        *app.shared.timer.borrow_mut() = None;
+        app.shared.timer_done_until.set(0);
+        crate::chime::alarm_stop();
+        app.huds.borrow_mut().silence_bell();
     }
 }
 
@@ -381,13 +451,16 @@ fn handle_event(app: &Rc<App>, ev: Event) {
                 p.cal_reload();
             }
             // async travel-time enrichment for physical addresses (driving + leave time)
-            if events.iter().any(|e| e.directions_url.is_some()) {
+            if events
+                .iter()
+                .any(|e| e.directions_url.is_some() && e.leave_label.is_none())
+            {
                 if let Some(tx) = app.shared.ui_tx.borrow().clone() {
                     let evs = events.clone();
                     std::thread::spawn(move || {
                         let enriched = services::calendar::enrich_with_travel(evs);
                         if enriched.iter().any(|e| e.leave_label.is_some()) {
-                            let _ = tx.send(Event::CalendarEnriched(enriched));
+                            tx.send(Event::CalendarEnriched(enriched));
                         }
                     });
                 }
@@ -476,14 +549,7 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
             }
         }
         Verb::TimerStop => {
-            *app.shared.timer.borrow_mut() = None;
-            app.shared.timer_done_until.set(0);
-            for p in app.pills.borrow().iter() {
-                p.tick();
-            }
-            for p in app.panels.borrow().iter() {
-                p.tick();
-            }
+            dismiss_timer();
         }
         Verb::Notify { summary, body } => {
             app.huds.borrow_mut().show_banner(

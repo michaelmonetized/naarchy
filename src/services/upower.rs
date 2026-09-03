@@ -1,6 +1,5 @@
-use crate::services::{BatteryState, Event};
+use crate::services::{BatteryState, Event, EventTx};
 use futures_lite::StreamExt;
-use std::sync::mpsc::Sender;
 use zbus::proxy;
 
 #[proxy(
@@ -17,12 +16,12 @@ trait DisplayDevice {
     fn is_present(&self) -> zbus::Result<bool>;
 }
 
-pub async fn run(tx: Sender<Event>) -> zbus::Result<()> {
+pub async fn run(tx: EventTx) -> zbus::Result<()> {
     let conn = zbus::Connection::system().await?;
     let dev = DisplayDeviceProxy::new(&conn).await?;
 
-    let send = |tx: &Sender<Event>, p: f64, s: u32, present: bool| {
-        let _ = tx.send(Event::Battery(BatteryState {
+    let send = |tx: &EventTx, p: f64, s: u32, present: bool| {
+        tx.send(Event::Battery(BatteryState {
             percent: p,
             charging: matches!(s, 1 | 4), // Charging | FullyCharged(pending discharge treat as full)
             present,

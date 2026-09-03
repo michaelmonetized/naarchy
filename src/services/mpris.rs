@@ -1,6 +1,7 @@
-use crate::services::{Event, MediaState};
-use std::collections::HashMap;
-use std::sync::mpsc::Sender;
+use crate::services::{Event, EventTx, MediaState};
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use zbus::proxy;
 use zbus::zvariant::OwnedValue;
@@ -69,104 +70,80 @@ fn friendly(bus: &str) -> String {
 }
 
 pub struct MediaHandle {
-    pub cmd_tx: std::sync::mpsc::Sender<MediaCmd>,
+    pub cmd_tx: tokio::sync::mpsc::UnboundedSender<MediaCmd>,
 }
 
-pub async fn run(tx: Sender<Event>) -> zbus::Result<MediaHandle> {
+pub async fn run(tx: EventTx) -> zbus::Result<MediaHandle> {
     let conn = Connection::session().await?;
-    let mut active: Option<String> = None;
+    let active = Arc::new(Mutex::new(None::<String>));
 
-    let _ = scan_and_emit(&conn, &mut active, &tx).await;
+    let _ = scan_and_emit(&conn, &active, &tx).await;
 
-    // Periodic rescan: catches player appear/disappear + status changes
     {
         let tx = tx.clone();
         let conn2 = conn.clone();
+        let active = active.clone();
         tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(4));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                tokio::time::sleep(Duration::from_millis(2000)).await;
-                let mut active = None;
-                let _ = scan_and_emit(&conn2, &mut active, &tx).await;
+                tick.tick().await;
+                let _ = scan_and_emit(&conn2, &active, &tx).await;
             }
         });
     }
 
-    // Position ticker: refresh the active player while it is playing
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<MediaCmd>();
     {
-        let tx = tx.clone();
         let conn = conn.clone();
+        let tx = tx.clone();
+        let active = active.clone();
         tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(900)).await;
+            while let Some(cmd) = cmd_rx.recv().await {
                 let names = list_player_names(&conn).await;
-                let mut active_bus = None;
-                for n in &names {
-                    if matches!(quick_status(&conn, n).await.as_deref(), Some("Playing")) {
-                        active_bus = Some(n.clone());
-                        break;
+                let current = active.lock().ok().and_then(|g| g.clone());
+                let mut target: Option<String> = None;
+                if let Some(cur) = current {
+                    if names.contains(&cur) {
+                        target = Some(cur);
                     }
                 }
-                let Some(bus) = active_bus else { continue };
-                if let Ok(st) = snapshot(&conn, &bus).await {
-                    let _ = tx.send(Event::Media(Some(st)));
-                }
-            }
-        });
-    }
-
-    // Command handler thread (UI → MPRIS calls)
-    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<MediaCmd>();
-    {
-        let conn = conn.clone();
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("cmd runtime");
-            while let Ok(cmd) = cmd_rx.recv() {
-                let conn = conn.clone();
-                let tx = tx.clone();
-                rt.block_on(async move {
-                    // re-scan to find active (playing preferred)
-                    let names = list_player_names(&conn).await;
-                    let mut target = None;
+                if target.is_none() {
                     for n in &names {
-                        if let Ok(st) = snapshot(&conn, n).await {
-                            if st.playing {
-                                target = Some(n.clone());
-                                break;
-                            }
+                        if matches!(quick_status(&conn, n).await.as_deref(), Some("Playing")) {
+                            target = Some(n.clone());
+                            break;
                         }
                     }
-                    if target.is_none() {
-                        target = names.first().cloned();
+                }
+                if target.is_none() {
+                    target = names.first().cloned();
+                }
+                let Some(bus) = target else { continue };
+                let Some(p) = player_proxy(&conn, &bus).await else {
+                    continue;
+                };
+                let res: zbus::Result<()> = match cmd {
+                    MediaCmd::PlayPause => p.play_pause().await,
+                    MediaCmd::Next => p.next().await,
+                    MediaCmd::Prev => p.previous().await,
+                    MediaCmd::Raise => p.raise().await,
+                    MediaCmd::SeekAbs(us) => seek_abs(&p, us).await,
+                    MediaCmd::SeekRel(us) => p.seek(us).await,
+                    MediaCmd::SetShuffle(v) => p.set_shuffle(v).await,
+                    MediaCmd::SetLoop(l) => {
+                        let s = match l {
+                            1 => "Track",
+                            2 => "Playlist",
+                            _ => "None",
+                        };
+                        p.set_loop_status(s).await
                     }
-                    let Some(bus) = target else { return };
-                    let p = player_proxy(&conn, &bus).await;
-                    let res: zbus::Result<()> = match cmd {
-                        MediaCmd::PlayPause => p.play_pause().await,
-                        MediaCmd::Next => p.next().await,
-                        MediaCmd::Prev => p.previous().await,
-                        MediaCmd::Raise => p.raise().await,
-                        MediaCmd::SeekAbs(us) => seek_abs(&p, us).await,
-                        MediaCmd::SeekRel(us) => p.seek(us).await,
-                        MediaCmd::SetShuffle(v) => p.set_shuffle(v).await,
-                        MediaCmd::SetLoop(l) => {
-                            let s = match l {
-                                1 => "Track",
-                                2 => "Playlist",
-                                _ => "None",
-                            };
-                            p.set_loop_status(s).await
-                        }
-                    };
-                    if let Err(e) = res {
-                        log::debug!("mpris cmd failed: {e}");
-                    }
-                    let mut active = None;
-                    let _ = scan_and_emit(&conn, &mut active, &tx).await;
-                });
+                };
+                if let Err(e) = res {
+                    log::debug!("mpris cmd failed: {e}");
+                }
+                let _ = scan_and_emit(&conn, &active, &tx).await;
             }
         });
     }
@@ -174,15 +151,15 @@ pub async fn run(tx: Sender<Event>) -> zbus::Result<MediaHandle> {
     Ok(MediaHandle { cmd_tx })
 }
 
-async fn player_proxy<'a>(conn: &'a Connection, bus: &str) -> PlayerProxy<'a> {
+async fn player_proxy<'a>(conn: &'a Connection, bus: &str) -> Option<PlayerProxy<'a>> {
     PlayerProxy::builder(conn)
         .destination(bus.to_string())
-        .unwrap()
+        .ok()?
         .path("/org/mpris/MediaPlayer2")
-        .unwrap()
+        .ok()?
         .build()
         .await
-        .expect("player proxy")
+        .ok()
 }
 
 async fn seek_abs(p: &PlayerProxy<'_>, us: i64) -> zbus::Result<()> {
@@ -224,41 +201,41 @@ async fn list_player_names(conn: &Connection) -> Vec<String> {
     out
 }
 
+fn set_active(active: &Mutex<Option<String>>, v: Option<String>) {
+    *active.lock().unwrap_or_else(|e| e.into_inner()) = v;
+}
+
 async fn scan_and_emit(
     conn: &Connection,
-    active: &mut Option<String>,
-    tx: &Sender<Event>,
+    active: &Mutex<Option<String>>,
+    tx: &EventTx,
 ) -> zbus::Result<()> {
     let names = list_player_names(conn).await;
     if names.is_empty() {
-        *active = None;
-        let _ = tx.send(Event::Media(None));
+        set_active(active, None);
+        tx.send(Event::Media(None));
         return Ok(());
     }
-    // rank candidates: playing first, then by original order; try snapshot in that order
-    // so a dying bus (snapshot failure) doesn't leave stale state
     let mut ranked: Vec<(bool, usize, &String)> = Vec::new();
     for (i, bus) in names.iter().enumerate() {
         let playing = matches!(quick_status(conn, bus).await.as_deref(), Some("Playing"));
         ranked.push((playing, i, bus));
     }
-    // playing=true sorts before false; lower i first
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     for (_, _, bus) in ranked {
         if let Ok(st) = snapshot(conn, bus).await {
-            *active = Some(bus.clone());
-            let _ = tx.send(Event::Media(Some(st)));
+            set_active(active, Some(bus.clone()));
+            tx.send(Event::Media(Some(st)));
             return Ok(());
         }
     }
-    // all snapshots failed → clear stale state
-    *active = None;
-    let _ = tx.send(Event::Media(None));
+    set_active(active, None);
+    tx.send(Event::Media(None));
     Ok(())
 }
 
 async fn quick_status(conn: &Connection, bus: &str) -> Option<String> {
-    let p = player_proxy(conn, bus).await;
+    let p = player_proxy(conn, bus).await?;
     p.playback_status().await.ok()
 }
 
@@ -266,7 +243,9 @@ async fn snapshot(
     conn: &Connection,
     bus: &str,
 ) -> Result<MediaState, Box<dyn std::error::Error + Send + Sync>> {
-    let p = player_proxy(conn, bus).await;
+    let p = player_proxy(conn, bus)
+        .await
+        .ok_or_else(|| std::io::Error::other("no player proxy"))?;
     let mut st = MediaState {
         bus: bus.to_string(),
         player: friendly(bus),
@@ -369,7 +348,12 @@ fn resolve_art(st: &mut MediaState) {
         let _ = std::fs::create_dir_all(&dir);
         let url2 = url.clone();
         let dest2 = dest.clone();
-        // blocking download off-thread; next snapshot picks it up from disk
+        {
+            let mut g = art_fetching().lock().unwrap_or_else(|e| e.into_inner());
+            if !g.insert(url.clone()) {
+                return;
+            }
+        }
         std::thread::spawn(move || {
             let agent = ureq::AgentBuilder::new()
                 .timeout_connect(Duration::from_secs(4))
@@ -396,6 +380,15 @@ fn resolve_art(st: &mut MediaState) {
                     let _ = std::fs::write(&dest2, &buf);
                 }
             }
+            art_fetching()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&url2);
         });
     }
+}
+
+fn art_fetching() -> &'static Mutex<HashSet<String>> {
+    static S: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashSet::new()))
 }

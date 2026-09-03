@@ -58,10 +58,6 @@ pub fn smoothstep(t: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
-}
-
 /// Content fades in once the shelf is ~40% open, fully there by ~80%.
 pub fn content_opacity(progress: f64) -> f64 {
     smoothstep((progress - 0.38) / 0.42)

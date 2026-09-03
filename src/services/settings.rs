@@ -1,6 +1,5 @@
-use crate::services::Event;
+use crate::services::{Event, EventTx};
 use futures_lite::StreamExt;
-use std::sync::mpsc::Sender;
 use zbus::proxy;
 
 #[proxy(
@@ -19,7 +18,7 @@ trait Settings {
     ) -> zbus::Result<()>;
 }
 
-pub async fn run(tx: Sender<Event>) -> zbus::Result<()> {
+pub async fn run(tx: EventTx) -> zbus::Result<()> {
     let conn = zbus::Connection::session().await?;
     let settings = SettingsProxy::new(&conn).await?;
 
@@ -30,7 +29,7 @@ pub async fn run(tx: Sender<Event>) -> zbus::Result<()> {
             .unwrap_or(true)
     }
 
-    let _ = tx.send(Event::SchemeDark(scheme_dark(&settings).await));
+    tx.send(Event::SchemeDark(scheme_dark(&settings).await));
 
     let mut stream = settings.receive_setting_changed().await?;
     while let Some(sig) = stream.next().await {
@@ -39,7 +38,7 @@ pub async fn run(tx: Sender<Event>) -> zbus::Result<()> {
             let key = args.key().to_string();
             if ns == "org.freedesktop.appearance" && key == "color-scheme" {
                 let dark = value_is_dark(args.value());
-                let _ = tx.send(Event::SchemeDark(dark));
+                tx.send(Event::SchemeDark(dark));
             }
         }
     }

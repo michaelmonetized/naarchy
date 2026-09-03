@@ -197,9 +197,22 @@ window.naarchy picture {{
 }}
 .na-bubble-text {{
   color: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.15px;
+  font-feature-settings: "tnum";
+}}
+.na-pill-count {{
+  font-size: 13px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+}}
+.na-pill-live .na-bubble-text,
+.na-pill-live .na-pill-count {{
+  font-size: 20px;
+}}
+.na-pill-live .na-glyph {{
+  font-size: 20px;
 }}
 
 .na-chip {{
@@ -221,18 +234,16 @@ window.naarchy picture {{
   box-shadow: 0 10px 28px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.08);
 }}
 .na-dock-btn {{
-  min-width: 38px;
-  min-height: 38px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
   border-radius: 999px;
   color: {fg};
-  transition: background-color 180ms {ease}, transform 180ms {ease};
+  transition: background-color 160ms {ease};
 }}
 .na-dock-btn:hover {{
   background-color: {glass_2};
-  transform: scale(1.10);
 }}
-.na-dock-btn:active {{ transform: scale(0.94); }}
 .na-dock-btn:checked {{
   background-color: rgba(255,255,255,0.16);
 }}
@@ -250,10 +261,22 @@ window.naarchy picture {{
   background-color: rgba({accent_rgb},0.07);
 }}
 window.naarchy box.na-drop-veil {{
-  background-color: rgba({accent_rgb}, 0.08);
+  background-color: rgba({accent_rgb}, 0.16);
   border: 2px dashed {accent};
-  border-radius: 32px;
+  border-radius: 28px;
   box-shadow: none;
+}}
+.na-drop-veil-label {{
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: {accent};
+}}
+.na-pile-shot {{
+  border-radius: 8px;
+  background-color: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.22);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.45);
 }}
 
 .na-widget {{
@@ -272,7 +295,6 @@ window.naarchy box.na-drop-veil {{
 }}
 .na-widget-item:hover {{
   background-color: {glass_2};
-  transform: scale(1.03);
 }}
 .na-widget-item.na-on {{
   background-color: rgba({accent_rgb},0.16);
@@ -285,9 +307,9 @@ window.naarchy box.na-drop-veil {{
   color: {fg};
 }}
 .na-clock-big {{
-  font-size: 44px;
+  font-size: 36px;
   font-weight: 700;
-  letter-spacing: -2.2px;
+  letter-spacing: -1.6px;
   font-feature-settings: "tnum";
 }}
 
@@ -329,11 +351,11 @@ window.naarchy box.na-drop-veil {{
   box-shadow: none;
 }}
 .na-media-card {{
-  border-radius: 16px;
-  padding: 10px 12px;
-  background-color: rgba(32,32,34,0.96);
-  border: 1px solid rgba(255,255,255,0.08);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  border-radius: 12px;
+  padding: 4px 0;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
 }}
 .na-media-title {{
   font-size: 18px;
@@ -372,10 +394,9 @@ window.naarchy box.na-drop-veil {{
   min-height: 36px;
   padding: 0 12px;
   font-size: 14px;
-  transition: background-color 160ms {ease}, transform 160ms {ease}, color 160ms {ease};
+  transition: background-color 160ms {ease}, color 160ms {ease};
 }}
-.na-btn:hover {{ background-color: {glass_2}; transform: scale(1.06); }}
-.na-btn:active {{ transform: scale(0.94); }}
+.na-btn:hover {{ background-color: {glass_2}; }}
 .na-btn.play {{
   background-color: rgba(255,255,255,0.92);
   color: #111118;
@@ -392,31 +413,6 @@ window.naarchy box.na-drop-veil {{
   color: {accent};
   background-color: rgba({accent_rgb},0.16);
 }}
-.na-slider trough {{
-  min-height: 4px;
-  border-radius: 4px;
-  background-color: {glass_3};
-}}
-.na-slider highlight {{
-  min-height: 4px;
-  border-radius: 4px;
-  background-color: {accent};
-}}
-.na-slider slider {{
-  min-width: 0px;
-  min-height: 0px;
-  margin: -4px;
-  background-color: transparent;
-  box-shadow: none;
-  border: none;
-}}
-.na-slider:hover slider {{
-  min-width: 10px;
-  min-height: 10px;
-  border-radius: 50%;
-  background-color: {fg};
-}}
-
 .na-shelf-tile {{
   border-radius: 18px;
   padding: 10px 8px 8px 8px;
@@ -427,7 +423,6 @@ window.naarchy box.na-drop-veil {{
 .na-shelf-tile:hover {{
   background-color: {glass_2};
   border-color: rgba({accent_rgb},0.45);
-  transform: scale(1.04);
 }}
 .na-shelf-thumb {{
   border-radius: 12px;
@@ -448,7 +443,7 @@ window.naarchy box.na-drop-veil {{
   border: 1px solid {border};
   transition: background-color 140ms {ease}, border-color 140ms {ease}, transform 140ms {ease};
 }}
-.na-clip-row:hover {{ background-color: {glass_2}; border-color: rgba({accent_rgb}, 0.22); transform: translateY(-1px); }}
+.na-clip-row:hover {{ background-color: {glass_2}; border-color: rgba({accent_rgb}, 0.22); }}
 .na-clip-preview {{
   font-size: 13px;
   font-weight: 500;
@@ -543,36 +538,34 @@ window.naarchy box.na-drop-veil {{
   border: 1px solid transparent;
   transition: background-color 160ms {ease}, transform 160ms {ease}, border-color 160ms {ease};
 }}
-.na-preset:hover {{ background-color: {glass_3}; transform: scale(1.05); border-color: rgba({accent_rgb},0.35); }}
+.na-preset:hover {{ background-color: {glass_3}; border-color: rgba({accent_rgb},0.35); }}
 
-.na-timer-big.na-timer-done {{
+.na-timer-start {{
+  border-radius: 999px;
+  min-height: 32px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  background-color: {accent};
+  color: #0d0e12;
+}}
+.na-timer-start:hover {{
+  background-color: #ffffff;
+}}
+.na-timer-hms {{
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -1.2px;
+  font-feature-settings: "tnum";
   color: {accent};
+}}
+.na-timer-hms.na-timer-done {{
   animation: na-bell-pulse 900ms {ease} infinite alternate;
 }}
-.na-timer-bell {{
-  font-size: 28px;
-  animation: na-bell-shake 700ms {ease} infinite;
-}}
-.na-timer-bell-text {{
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.6px;
-  color: {accent};
-}}
-.na-timer-status {{
-  font-weight: 700;
-}}
-.na-timer-entry {{
-  min-width: 96px;
-}}
-@keyframes na-bell-shake {{
-  0% {{ transform: rotate(-8deg); }}
-  50% {{ transform: rotate(8deg); }}
-  100% {{ transform: rotate(-8deg); }}
-}}
 @keyframes na-bell-pulse {{
-  0% {{ opacity: 0.92; transform: scale(1.0); }}
-  100% {{ opacity: 1.0; transform: scale(1.03); }}
+  0% {{ opacity: 0.92; }}
+  100% {{ opacity: 1.0; }}
 }}
 
 .na-settings-btn {{

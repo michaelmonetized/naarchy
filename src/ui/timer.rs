@@ -1,171 +1,156 @@
-use super::{fmt_mmss, g, glyph_btn, label, now_secs, Shared, TimerState};
+use super::{fmt_hms, label, now_secs, Shared, TimerState};
+use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap};
+use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::{Button, Entry, Label, Revealer};
+use gtk4::{Button, EventControllerScroll, EventControllerScrollFlags, GestureDrag, Label};
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Polished timer: circular progress + big clock + quick presets + custom entry
-/// Visual bell pulses when done, audible chime repeats until dismissed.
+const PX_PER_MIN: f64 = 12.0;
+const MIN_SECS: u64 = 1;
+const MAX_SECS: u64 = 24 * 3600;
+const DEFAULT_SECS: u64 = 5 * 60;
+const CLICK_PX: f64 = 6.0;
+
+/// Timer card: a horizontal minute ruler and a big `h:mm:ss` readout.
+/// Release the ruler to start. Click it while running to pause, click again
+/// to resume.
 pub struct TimerUi {
     root: gtk4::Box,
-    ring: gtk4::DrawingArea,
-    big: Label,
-    status: Label,
-    sub: Label,
-    pause_btn: Button,
-    reset_btn: Button,
-    dismiss_btn: Button,
-    bell_revealer: Revealer,
-    #[allow(dead_code)]
-    custom_entry: Entry,
-    last_chime: Rc<Cell<u64>>,
+    ruler: gtk4::DrawingArea,
+    time_lbl: Label,
+    start_btn: Button,
+    picked: Rc<Cell<u64>>,
 }
 
 impl TimerUi {
     pub fn build(shared: &Rc<Shared>) -> Self {
-        let root = super::vbox(12);
+        let picked = Rc::new(Cell::new(DEFAULT_SECS));
+
+        let root = super::vbox(10);
         root.set_halign(gtk4::Align::Fill);
         root.set_valign(gtk4::Align::Center);
         root.set_hexpand(true);
 
-        // Presets row
-        let presets = super::hbox(6);
-        presets.set_halign(gtk4::Align::Center);
-        for (lbl, secs) in [
-            ("30s", 30u64),
-            ("1m", 60),
-            ("5m", 300),
-            ("10m", 600),
-            ("25m", 1500),
-        ] {
-            let b = Button::with_label(lbl);
-            b.set_css_classes(&["na-preset"]);
-            let sh = shared.clone();
-            b.connect_clicked(move |_| start_timer(&sh, secs));
-            presets.append(&b);
-        }
-        // Custom entry + Go
-        let custom_entry = Entry::new();
-        custom_entry.set_placeholder_text(Some("25m / 90s"));
-        custom_entry.set_width_request(90);
-        custom_entry.set_css_classes(&["na-entry", "na-timer-entry"]);
-        custom_entry.set_max_length(8);
-        let go = Button::with_label("Go");
-        go.set_css_classes(&["na-btn", "ghost"]);
+        let ruler = gtk4::DrawingArea::new();
+        ruler.set_hexpand(true);
+        ruler.set_height_request(72);
+        ruler.set_halign(gtk4::Align::Fill);
+        ruler.set_cursor(gdk::Cursor::from_name("sb_h_double_arrow", None).as_ref());
         {
             let sh = shared.clone();
-            let entry = custom_entry.clone();
-            let entry2 = entry.clone();
-            let do_go = Rc::new(move || {
-                let txt = entry.text().to_string();
-                if let Some(secs) = parse_custom(&txt) {
-                    start_timer(&sh, secs);
-                    entry.set_text("");
+            let picked = picked.clone();
+            ruler.set_draw_func(move |_da, cr, w, h| {
+                let minutes = display_minutes(&sh, picked.get());
+                let (ar, ag, ab) = sh.accent_rgb();
+                let done = sh.timer_done_until.get() > now_secs();
+                draw_ruler(cr, w as f64, h as f64, minutes, (ar, ag, ab), done);
+            });
+        }
+        root.append(&ruler);
+
+        let time_lbl = label(&["na-timer-hms"], &fmt_hms(DEFAULT_SECS));
+        time_lbl.set_halign(gtk4::Align::End);
+        time_lbl.set_hexpand(true);
+        time_lbl.set_valign(gtk4::Align::Center);
+
+        let row = super::hbox(10);
+        row.set_halign(gtk4::Align::Fill);
+        row.set_hexpand(true);
+        row.set_valign(gtk4::Align::Center);
+
+        let start_btn = Button::with_label("Start Timer");
+        start_btn.set_css_classes(&["na-timer-start"]);
+        start_btn.set_valign(gtk4::Align::Center);
+        {
+            let sh = shared.clone();
+            let picked = picked.clone();
+            let time2 = time_lbl.clone();
+            let ruler2 = ruler.clone();
+            start_btn.connect_clicked(move |btn| {
+                handle_press(&sh, picked.get(), false, &time2, btn, &ruler2);
+            });
+        }
+
+        let drag_origin = Rc::new(Cell::new(0.0_f64));
+        let drag = GestureDrag::new();
+        {
+            let sh = shared.clone();
+            let picked = picked.clone();
+            let origin = drag_origin.clone();
+            drag.connect_drag_begin(move |_, _, _| {
+                if is_running(&sh) || is_done(&sh) {
+                    return;
                 }
-            });
-            let d2 = do_go.clone();
-            go.connect_clicked(move |_| d2());
-            let d3 = do_go.clone();
-            entry2.connect_activate(move |_| d3());
-        }
-        presets.append(&custom_entry);
-        presets.append(&go);
-        root.append(&presets);
-
-        // Ring + clock overlay
-        let ring = gtk4::DrawingArea::new();
-        ring.set_size_request(148, 148);
-        ring.set_halign(gtk4::Align::Center);
-        ring.set_valign(gtk4::Align::Center);
-        {
-            let sh = shared.clone();
-            ring.set_draw_func(move |_da, cr, w, h| {
-                draw_ring(cr, &sh, w as f64, h as f64);
+                origin.set(scrub_origin(&sh, picked.get()));
             });
         }
-        let big = label(&["na-clock-big", "na-timer-big"], "00:00");
-        big.set_halign(gtk4::Align::Center);
-        big.set_valign(gtk4::Align::Center);
-
-        let status = label(&["na-dim", "na-timer-status"], "Pick a time");
-        status.set_halign(gtk4::Align::Center);
-        let sub = label(&["na-mute"], "");
-        sub.set_halign(gtk4::Align::Center);
-
-        // Bell overlay (revealed when done)
-        let bell_box = super::vbox(6);
-        bell_box.set_halign(gtk4::Align::Center);
-        let bell_icon = label(&["na-timer-bell"], "🔔");
-        bell_icon.set_halign(gtk4::Align::Center);
-        let bell_text = label(&["na-timer-bell-text"], "Time’s up!");
-        bell_text.set_halign(gtk4::Align::Center);
-        bell_box.append(&bell_icon);
-        bell_box.append(&bell_text);
-        let bell_revealer = Revealer::new();
-        bell_revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
-        bell_revealer.set_transition_duration(220);
-        bell_revealer.set_reveal_child(false);
-        bell_revealer.set_child(Some(&bell_box));
-        bell_revealer.set_halign(gtk4::Align::Center);
-
-        let center = gtk4::Overlay::new();
-        center.set_halign(gtk4::Align::Center);
-        center.set_size_request(168, 168);
-        center.set_child(Some(&ring));
-        center.add_overlay(&big);
-
-        let middle = super::vbox(4);
-        middle.set_halign(gtk4::Align::Center);
-        middle.append(&center);
-        middle.append(&status);
-        middle.append(&sub);
-        middle.append(&bell_revealer);
-        root.append(&middle);
-
-        let controls = super::hbox(8);
-        controls.set_halign(gtk4::Align::Center);
-        let pause_btn = glyph_btn(&["na-btn", "play"], g::PAUSE);
-        pause_btn.set_tooltip_text(Some("Pause / Resume"));
         {
             let sh = shared.clone();
-            pause_btn.connect_clicked(move |_| toggle_pause(&sh));
-        }
-        let reset_btn = Button::with_label("Reset");
-        reset_btn.set_css_classes(&["na-btn", "ghost"]);
-        {
-            let sh = shared.clone();
-            reset_btn.connect_clicked(move |_| {
-                *sh.timer.borrow_mut() = None;
-                sh.timer_done_until.set(0);
+            let picked = picked.clone();
+            let origin = drag_origin.clone();
+            let ruler2 = ruler.clone();
+            let time2 = time_lbl.clone();
+            drag.connect_drag_update(move |_, dx, _| {
+                if is_running(&sh) || is_done(&sh) {
+                    return;
+                }
+                let mins = origin.get() - dx / PX_PER_MIN;
+                let secs = clamp_secs((mins * 60.0).round().max(0.0) as u64);
+                picked.set(secs);
+                time2.set_text(&fmt_hms(secs));
+                ruler2.queue_draw();
             });
         }
-        let dismiss_btn = Button::with_label("Dismiss");
-        dismiss_btn.set_css_classes(&["na-btn", "ghost", "na-timer-dismiss"]);
-        dismiss_btn.set_visible(false);
         {
             let sh = shared.clone();
-            dismiss_btn.connect_clicked(move |_| {
-                *sh.timer.borrow_mut() = None;
-                sh.timer_done_until.set(0);
+            let picked = picked.clone();
+            let ruler2 = ruler.clone();
+            let time2 = time_lbl.clone();
+            let btn2 = start_btn.clone();
+            drag.connect_drag_end(move |_, dx, dy| {
+                let dragged = dx.hypot(dy) >= CLICK_PX;
+                if !is_running(&sh) && !is_done(&sh) {
+                    let mins = ((picked.get() as f64) / 60.0).round().max(1.0);
+                    picked.set(clamp_secs((mins as u64).saturating_mul(60)));
+                }
+                handle_press(&sh, picked.get(), dragged, &time2, &btn2, &ruler2);
             });
         }
-        controls.append(&pause_btn);
-        controls.append(&reset_btn);
-        controls.append(&dismiss_btn);
-        root.append(&controls);
+        ruler.add_controller(drag);
+
+        let scroll = EventControllerScroll::new(EventControllerScrollFlags::BOTH_AXES);
+        {
+            let sh = shared.clone();
+            let picked = picked.clone();
+            let ruler2 = ruler.clone();
+            let time2 = time_lbl.clone();
+            scroll.connect_scroll(move |_, dx, dy| {
+                if is_running(&sh) || is_done(&sh) {
+                    return gtk4::glib::Propagation::Stop;
+                }
+                let delta = if dy.abs() >= dx.abs() { dy } else { dx };
+                let mins = picked.get() as f64 / 60.0 - delta;
+                let snapped = mins.round().clamp(1.0, (MAX_SECS / 60) as f64);
+                let secs = clamp_secs((snapped as u64).saturating_mul(60));
+                picked.set(secs);
+                time2.set_text(&fmt_hms(secs));
+                ruler2.queue_draw();
+                gtk4::glib::Propagation::Stop
+            });
+        }
+        ruler.add_controller(scroll);
+
+        row.append(&start_btn);
+        row.append(&time_lbl);
+        root.append(&row);
 
         let p = Self {
             root,
-            ring,
-            big,
-            status,
-            sub,
-            pause_btn,
-            reset_btn,
-            dismiss_btn,
-            bell_revealer,
-            custom_entry,
-            last_chime: Rc::new(Cell::new(0)),
+            ruler,
+            time_lbl,
+            start_btn,
+            picked,
         };
         p.refresh();
         p
@@ -176,256 +161,208 @@ impl TimerUi {
     }
 
     pub fn start(&self, secs: u64) {
-        super::with_shared(|sh| start_timer(sh, secs.max(1)));
+        let secs = clamp_secs(secs.max(MIN_SECS));
+        self.picked.set(secs);
+        super::with_shared(|sh| start_timer(sh, secs));
         self.refresh();
     }
 
     pub fn refresh(&self) {
         super::with_shared(|sh| {
-            let done_on = sh.timer_done_until.get() > now_secs();
-            match sh.timer.borrow().as_ref() {
-                Some(t) => {
-                    let rem = t.remaining_secs();
-                    self.big.set_text(&fmt_mmss(rem));
-                    if done_on || rem == 0 && !t.running() && t.paused_remaining.is_none() {
-                        self.status.set_text("Done — Time’s up!");
-                        self.sub.set_text("🔔  Dismiss to stop the bell");
-                        self.bell_revealer.set_reveal_child(true);
-                        self.big.add_css_class("na-timer-done");
-                        self.pause_btn.set_sensitive(false);
-                        self.reset_btn.set_sensitive(true);
-                        self.dismiss_btn.set_visible(true);
-                        self.pause_btn
-                            .set_child(Some(&super::label(&["na-glyph"], g::PLAY)));
-                    } else if t.paused_remaining.is_some() {
-                        self.status.set_text("Paused");
-                        self.sub.set_text(&format!("{} remaining", fmt_mmss(rem)));
-                        self.bell_revealer.set_reveal_child(false);
-                        self.big.remove_css_class("na-timer-done");
-                        self.pause_btn.set_sensitive(true);
-                        self.reset_btn.set_sensitive(true);
-                        self.dismiss_btn.set_visible(false);
-                        self.pause_btn
-                            .set_child(Some(&super::label(&["na-glyph"], g::PLAY)));
-                    } else {
-                        self.status.set_text("Running");
-                        let total = t.total;
-                        self.sub.set_text(&format!(
-                            "{} / {} elapsed",
-                            fmt_mmss(total.saturating_sub(rem)),
-                            fmt_mmss(total)
-                        ));
-                        self.bell_revealer.set_reveal_child(false);
-                        self.big.remove_css_class("na-timer-done");
-                        self.pause_btn.set_sensitive(true);
-                        self.reset_btn.set_sensitive(true);
-                        self.dismiss_btn.set_visible(false);
-                        self.pause_btn
-                            .set_child(Some(&super::label(&["na-glyph"], g::PAUSE)));
-                    }
-                }
-                None => {
-                    if done_on {
-                        self.big.set_text("00:00");
-                        self.status.set_text("Done — Time’s up!");
-                        self.sub.set_text("🔔  Dismiss to stop the bell");
-                        self.bell_revealer.set_reveal_child(true);
-                        self.big.add_css_class("na-timer-done");
-                        self.pause_btn.set_sensitive(false);
-                        self.reset_btn.set_sensitive(true);
-                        self.dismiss_btn.set_visible(true);
-                    } else {
-                        self.big.set_text("00:00");
-                        self.status.set_text("Pick a time");
-                        self.sub.set_text("Presets or type 25m / 90s above");
-                        self.bell_revealer.set_reveal_child(false);
-                        self.big.remove_css_class("na-timer-done");
-                        self.pause_btn
-                            .set_child(Some(&super::label(&["na-glyph"], g::PLAY)));
-                        self.pause_btn.set_sensitive(false);
-                        self.reset_btn.set_sensitive(false);
-                        self.dismiss_btn.set_visible(false);
-                    }
-                }
-            }
-            // only redraw ring when it actually shows progress or done pulse
-            let needs_ring = sh.timer.borrow().is_some() || sh.timer_done_until.get() > now_secs();
-            if needs_ring {
-                self.ring.queue_draw();
-            }
+            paint(
+                sh,
+                self.picked.get(),
+                &self.time_lbl,
+                &self.start_btn,
+                &self.ruler,
+            );
         });
     }
 
     pub fn tick(&self) {
-        super::with_shared(|sh| {
-            let now = now_secs();
-            let fired = {
-                match sh.timer.borrow().as_ref() {
-                    Some(t) if t.remaining_secs() == 0 && t.running() => {
-                        // keep ringing for 60s, not 6s, so bell and sound loop have time
-                        sh.timer_done_until.set(now + 60);
-                        true
-                    }
-                    _ => false,
-                }
-            };
-            if fired {
-                self.last_chime.set(now);
-                crate::app::request_collapse_all();
-                crate::app::notify_ui("Timer done", "Time is up — dismiss to stop the bell.");
-                crate::chime::play();
-                // also try system bell as fallback
-                crate::chime::system_bell();
-                crate::app::flash_pills();
-                // ensure panel is visible if user wants visual bell inside?
-            } else {
-                // looping audible alarm every 3s while done
-                let done = sh.timer_done_until.get();
-                if done > now && done > 0 {
-                    let last = self.last_chime.get();
-                    if now.saturating_sub(last) >= 3 {
-                        self.last_chime.set(now);
-                        crate::chime::play();
-                        crate::chime::system_bell();
-                        crate::app::flash_pills();
-                    }
-                }
-            }
-            let done = sh.timer_done_until.get();
-            if done > 0 && now >= done {
-                sh.timer_done_until.set(0);
-                *sh.timer.borrow_mut() = None;
-            }
-        });
         self.refresh();
     }
 }
 
-fn elapsed_frac(t: &TimerState) -> f64 {
-    let total = t.total.max(1);
-    let remaining = t.remaining_secs();
-    let elapsed = total.saturating_sub(remaining) as f64;
-    (elapsed / total as f64).clamp(0.0, 1.0)
+fn is_done(sh: &Rc<Shared>) -> bool {
+    sh.timer_done_until.get() > now_secs()
 }
 
-fn remaining_frac(t: &TimerState) -> f64 {
-    1.0 - elapsed_frac(t)
+fn is_running(sh: &Rc<Shared>) -> bool {
+    sh.timer.borrow().as_ref().is_some_and(|t| t.running())
 }
 
-fn draw_ring(cr: &gtk4::cairo::Context, sh: &Rc<Shared>, w: f64, h: f64) {
-    let (ar, ag, ab) = sh.accent_rgb();
-    let cx = w * 0.5;
-    let cy = h * 0.5;
-    let radius = (w.min(h) * 0.5 - 8.0).max(8.0);
-    let line_w = 7.0;
+fn is_paused(sh: &Rc<Shared>) -> bool {
+    sh.timer
+        .borrow()
+        .as_ref()
+        .is_some_and(|t| t.paused_remaining.is_some() && t.remaining_secs() > 0)
+}
 
-    let done_on = sh.timer_done_until.get() > now_secs();
-    let frac = if let Some(t) = sh.timer.borrow().as_ref() {
-        if done_on {
-            1.0
-        } else {
-            remaining_frac(t)
+fn scrub_origin(sh: &Rc<Shared>, picked: u64) -> f64 {
+    if let Some(t) = sh.timer.borrow().as_ref() {
+        if t.paused_remaining.is_some() {
+            return t.remaining_secs() as f64 / 60.0;
         }
-    } else if done_on {
-        1.0
-    } else {
-        0.0
-    };
+    }
+    picked as f64 / 60.0
+}
 
-    // track
-    cr.set_line_width(line_w);
-    cr.set_line_cap(gtk4::cairo::LineCap::Round);
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
-    cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
-    let _ = cr.stroke();
-
-    if frac <= 0.001 && !done_on {
+/// Ruler release / Start button.
+///
+/// Idle: start the picked duration. Running: pause. Paused click: resume.
+/// Paused after a real drag: start the newly picked duration. Done: dismiss.
+fn handle_press(
+    sh: &Rc<Shared>,
+    picked: u64,
+    dragged: bool,
+    time_lbl: &Label,
+    start_btn: &Button,
+    ruler: &gtk4::DrawingArea,
+) {
+    if is_done(sh) {
+        crate::app::dismiss_timer();
+        paint(sh, picked, time_lbl, start_btn, ruler);
         return;
     }
-
-    // glow backdrop when done
-    if done_on {
-        cr.set_source_rgba(
-            ar as f64 / 255.0,
-            ag as f64 / 255.0,
-            ab as f64 / 255.0,
-            0.18,
-        );
-        cr.arc(cx, cy, radius + 6.0, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
+    if is_running(sh) {
+        toggle_pause(sh);
+        paint(sh, picked, time_lbl, start_btn, ruler);
+        return;
     }
-
-    // progress arc (remaining)
-    let start = -std::f64::consts::FRAC_PI_2;
-    let end = start + frac * std::f64::consts::TAU;
-    cr.set_source_rgba(
-        ar as f64 / 255.0,
-        ag as f64 / 255.0,
-        ab as f64 / 255.0,
-        if done_on { 0.95 } else { 0.92 },
-    );
-    cr.arc(cx, cy, radius, start, end);
-    let _ = cr.stroke();
-
-    // knob at end of arc when running
-    if !done_on && frac > 0.01 && frac < 0.999 {
-        let ang = end;
-        let kx = cx + radius * ang.cos();
-        let ky = cy + radius * ang.sin();
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-        cr.arc(kx, ky, 5.0, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
-        cr.set_source_rgba(
-            ar as f64 / 255.0,
-            ag as f64 / 255.0,
-            ab as f64 / 255.0,
-            0.55,
-        );
-        cr.set_line_width(2.0);
-        cr.arc(kx, ky, 5.0, 0.0, std::f64::consts::TAU);
-        let _ = cr.stroke();
+    if is_paused(sh) && !dragged {
+        toggle_pause(sh);
+        paint(sh, picked, time_lbl, start_btn, ruler);
+        return;
     }
-
-    // center done pulse
-    if done_on {
-        let pulse = (now_secs() % 2) as f64 * 0.5;
-        cr.set_source_rgba(
-            ar as f64 / 255.0,
-            ag as f64 / 255.0,
-            ab as f64 / 255.0,
-            0.12 + pulse * 0.08,
-        );
-        cr.arc(cx, cy, radius * 0.62, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
-    }
+    start_timer(sh, picked.max(MIN_SECS));
+    paint(sh, picked, time_lbl, start_btn, ruler);
 }
 
-fn parse_custom(s: &str) -> Option<u64> {
-    let s = s.trim().to_lowercase();
-    if s.is_empty() {
-        return None;
-    }
-    // accept "25m" "90s" "1h" "1:30" "90" etc.
-    if let Some((m, sec)) = s.split_once(':') {
-        if let (Ok(mm), Ok(ss)) = (m.parse::<u64>(), sec.parse::<u64>()) {
-            return Some(mm * 60 + ss);
+fn paint(
+    sh: &Rc<Shared>,
+    picked: u64,
+    time_lbl: &Label,
+    start_btn: &Button,
+    ruler: &gtk4::DrawingArea,
+) {
+    let done_on = is_done(sh);
+    match sh.timer.borrow().as_ref() {
+        Some(t) => {
+            let rem = t.remaining_secs();
+            time_lbl.set_text(&fmt_hms(rem));
+            if done_on || rem == 0 && !t.running() && t.paused_remaining.is_none() {
+                time_lbl.add_css_class("na-timer-done");
+                start_btn.set_label("Dismiss");
+            } else if t.paused_remaining.is_some() {
+                time_lbl.remove_css_class("na-timer-done");
+                start_btn.set_label("Resume");
+            } else {
+                time_lbl.remove_css_class("na-timer-done");
+                start_btn.set_label("Pause");
+            }
+        }
+        None => {
+            if done_on {
+                time_lbl.set_text(&fmt_hms(0));
+                time_lbl.add_css_class("na-timer-done");
+                start_btn.set_label("Dismiss");
+            } else {
+                time_lbl.set_text(&fmt_hms(picked));
+                time_lbl.remove_css_class("na-timer-done");
+                start_btn.set_label("Start Timer");
+            }
         }
     }
-    let (num, unit): (String, String) = s.chars().partition(|c| c.is_ascii_digit());
-    if num.is_empty() {
-        return None;
+    let grab = !is_running(sh) && !done_on;
+    ruler.set_cursor(
+        gdk::Cursor::from_name(if grab { "sb_h_double_arrow" } else { "pointer" }, None).as_ref(),
+    );
+    ruler.queue_draw();
+}
+
+fn display_minutes(sh: &Rc<Shared>, picked: u64) -> f64 {
+    if is_done(sh) {
+        return 0.0;
     }
-    let n: u64 = num.parse().ok()?;
-    match unit.as_str() {
-        "s" | "sec" | "secs" | "seconds" => Some(n),
-        "m" | "min" | "mins" | "minutes" => Some(n * 60),
-        "h" | "hr" | "hour" | "hours" => Some(n * 3600),
-        "" => Some(n * 60), // bare number = minutes for UX
-        _ => None,
+    if let Some(t) = sh.timer.borrow().as_ref() {
+        return t.remaining_secs() as f64 / 60.0;
     }
+    picked as f64 / 60.0
+}
+
+fn clamp_secs(secs: u64) -> u64 {
+    secs.clamp(MIN_SECS, MAX_SECS)
+}
+
+fn draw_ruler(cr: &Context, w: f64, h: f64, minutes: f64, accent: (u8, u8, u8), done: bool) {
+    if w < 8.0 || h < 8.0 {
+        return;
+    }
+    let (ar, ag, ab) = (
+        accent.0 as f64 / 255.0,
+        accent.1 as f64 / 255.0,
+        accent.2 as f64 / 255.0,
+    );
+    let cx = w * 0.5;
+    let tick_top = 22.0;
+    let major_h = 26.0;
+    let minor_h = 12.0;
+    let pulse = if done {
+        0.55 + 0.45 * ((now_secs() % 2) as f64)
+    } else {
+        1.0
+    };
+
+    let min_visible = minutes - (cx / PX_PER_MIN) - 1.0;
+    let max_visible = minutes + (cx / PX_PER_MIN) + 1.0;
+    let start = min_visible.floor() as i64;
+    let end = max_visible.ceil() as i64;
+    let max_min = (MAX_SECS / 60) as i64;
+
+    cr.set_line_cap(LineCap::Round);
+    cr.select_font_face("sans", FontSlant::Normal, FontWeight::Bold);
+    cr.set_font_size(11.0);
+
+    for m in start..=end {
+        if m < 0 || m > max_min {
+            continue;
+        }
+        let x = cx + (m as f64 - minutes) * PX_PER_MIN;
+        if x < -20.0 || x > w + 20.0 {
+            continue;
+        }
+        let edge = ((x - cx).abs() / (cx.max(1.0))).clamp(0.0, 1.0);
+        let fade = (1.0 - edge * edge) * pulse;
+        let major = m % 5 == 0;
+        let th = if major { major_h } else { minor_h };
+        cr.set_line_width(if major { 2.0 } else { 1.2 });
+        cr.set_source_rgba(ar, ag, ab, (if major { 0.92 } else { 0.45 }) * fade);
+        cr.move_to(x, tick_top);
+        cr.line_to(x, tick_top + th);
+        let _ = cr.stroke();
+        if major && fade > 0.12 {
+            let txt = format!("{m}");
+            if let Ok(e) = cr.text_extents(&txt) {
+                cr.set_source_rgba(ar, ag, ab, 0.95 * fade);
+                cr.move_to(x - e.width() / 2.0 - e.x_bearing(), 14.0);
+                let _ = cr.show_text(&txt);
+            }
+        }
+    }
+
+    let py = tick_top + major_h + 8.0;
+    cr.set_source_rgba(ar, ag, ab, 0.95 * pulse);
+    cr.move_to(cx, py);
+    cr.line_to(cx - 6.0, py + 9.0);
+    cr.line_to(cx + 6.0, py + 9.0);
+    cr.close_path();
+    let _ = cr.fill();
 }
 
 fn start_timer(shared: &Rc<Shared>, secs: u64) {
+    crate::chime::alarm_stop();
+    crate::app::silence_bell();
     *shared.timer.borrow_mut() = Some(TimerState {
         end_at: now_secs() + secs,
         paused_remaining: None,
@@ -446,5 +383,17 @@ fn toggle_pause(shared: &Rc<Shared>) {
         } else {
             t.paused_remaining = Some(t.remaining_secs());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_keeps_the_ruler_in_range() {
+        assert_eq!(clamp_secs(0), 1);
+        assert_eq!(clamp_secs(MAX_SECS + 10), MAX_SECS);
+        assert_eq!(clamp_secs(300), 300);
     }
 }

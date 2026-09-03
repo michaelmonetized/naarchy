@@ -160,8 +160,8 @@ impl MediaPage {
 
     pub fn update(&self) {
         super::with_shared(|sh| {
-            let st_opt = sh.media.borrow();
-            if let Some(st) = st_opt.as_ref() {
+            let st = sh.media.borrow().clone();
+            if let Some(st) = st.as_ref() {
                 // keep player label hidden when playing (image has no player), show only when debugging
                 self.player_lbl.set_visible(false);
                 self.title.set_text(if st.title.is_empty() {

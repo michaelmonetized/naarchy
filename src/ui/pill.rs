@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const PILL_H: i32 = super::liquid::NOTCH_H as i32;
-const PILL_W: i32 = super::liquid::NOTCH_W as i32;
+const LIVE_H: i32 = super::liquid::LIVE_H as i32;
 
 /// Which content pair is currently wrapped around the notch.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -22,6 +22,7 @@ pub struct PillUi {
     pub win: ApplicationWindow,
     root: gtk4::Box,
     left_box: gtk4::Box,
+    mid_box: gtk4::Box,
     right_box: gtk4::Box,
     clock_label: Label,
     battery_label: Label,
@@ -32,15 +33,22 @@ pub struct PillUi {
     media_title: Label,
     files_icon: Label,
     files_count: Label,
+    files_pile: gtk4::Box,
+    last_pile: RefCell<String>,
     flash: Rc<Cell<f64>>,
     flash_vel: Rc<Cell<f64>>,
     flash_tick: Rc<Cell<Option<gtk4::TickCallbackId>>>,
     w_cur: Rc<Cell<f64>>,
     w_vel: Rc<Cell<f64>>,
     w_target: Rc<Cell<f64>>,
+    h_cur: Rc<Cell<f64>>,
+    h_vel: Rc<Cell<f64>>,
+    h_target: Rc<Cell<f64>>,
     w_tick: Rc<Cell<Option<gtk4::TickCallbackId>>>,
     last_art_path: RefCell<Option<String>>,
     last_mood: Cell<Mood>,
+    base_w: i32,
+    show_clock: bool,
 }
 
 impl PillUi {
@@ -57,11 +65,7 @@ impl PillUi {
             } else {
                 cfg.appearance.pill_width_island
             };
-            (
-                w.max(PILL_W),
-                cfg.appearance.margin_top,
-                cfg.clock.show_in_pill,
-            )
+            (w.max(64), cfg.appearance.margin_top, cfg.clock.show_in_pill)
         };
 
         // Resolve the capsule colors/geometry once (config + omarchy theme).
@@ -69,13 +73,12 @@ impl PillUi {
         let pal = shared.palette();
         let fill = (0u8, 0u8, 0u8);
         let flash_color = pal.accent_rgb;
-        let (top_r, bot_r) = super::liquid::notch_radii();
 
         let win = ApplicationWindow::builder()
             .application(app)
             .title("naarchy-pill")
             .decorated(false)
-            .resizable(false)
+            .resizable(true)
             .default_width(base_w)
             .default_height(PILL_H)
             .build();
@@ -104,23 +107,32 @@ impl PillUi {
         let media_icon = label(&["na-bubble-text", "na-glyph"], super::g::MUSIC);
         media_icon.set_visible(false);
         let files_icon = label(&["na-bubble-text", "na-glyph"], super::g::FOLDER);
+        let files_pile = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        files_pile.set_valign(gtk4::Align::Center);
+        files_pile.set_visible(false);
         left_box.append(&timer_icon);
         left_box.append(&media_art);
         left_box.append(&media_icon);
         left_box.append(&files_icon);
+        left_box.append(&files_pile);
 
-        // Center notch / island
+        // Center of the island. Idle: this IS the pill. Live: it hexpands so
+        // leading/trailing activities sit on the ears, not on top of each other.
         let notch_box = hbox(8);
         notch_box.set_css_classes(&["na-pill"]);
         notch_box.set_size_request(base_w, PILL_H);
-        notch_box.set_halign(gtk4::Align::Center);
+        notch_box.set_halign(gtk4::Align::Fill);
         notch_box.set_valign(gtk4::Align::Center);
+        notch_box.set_hexpand(true);
 
         let clock_label = label(&["na-chip"], "");
         clock_label.set_visible(show_clock);
         let battery_label = label(&["na-chip"], "");
         battery_label.set_visible(false);
+        let mid_spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        mid_spacer.set_hexpand(true);
         notch_box.append(&clock_label);
+        notch_box.append(&mid_spacer);
         notch_box.append(&battery_label);
 
         // Right bubble — grows to the right of the notch
@@ -129,11 +141,13 @@ impl PillUi {
         right_box.set_margin_end(12);
         right_box.set_visible(false);
 
-        let timer_count = label(&["na-bubble-text"], "00:00");
+        let timer_count = label(&["na-bubble-text", "na-pill-count"], "00:00");
+        timer_count.set_width_chars(5);
+        timer_count.set_xalign(1.0);
         let media_title = label(&["na-bubble-text"], "");
         media_title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         media_title.set_single_line_mode(true);
-        media_title.set_max_width_chars(24);
+        media_title.set_max_width_chars(18);
         let files_count = label(&["na-bubble-text"], "0");
         right_box.append(&timer_count);
         right_box.append(&media_title);
@@ -142,7 +156,10 @@ impl PillUi {
         // One continuous capsule: no spacing between the pieces, so the whole
         // strip (bubbles + notch) reads as a single contiguous black pill.
         let root = hbox(0);
-        root.set_valign(gtk4::Align::Center);
+        root.set_halign(gtk4::Align::Fill);
+        root.set_valign(gtk4::Align::Fill);
+        root.set_hexpand(true);
+        root.set_vexpand(true);
         root.append(&left_box);
         root.append(&notch_box);
         root.append(&right_box);
@@ -165,12 +182,13 @@ impl PillUi {
                 pulse: 0.0,
             };
             canvas.set_draw_func(move |_da, cr, w, h| {
+                let (rt, rb) = super::liquid::notch_radii_for(h as f64);
                 draw_notch(
                     cr,
                     w as f64,
                     h as f64,
-                    top_r,
-                    bot_r,
+                    rt,
+                    rb,
                     NotchColors {
                         pulse: flash2.get(),
                         ..colors
@@ -215,6 +233,7 @@ impl PillUi {
             win,
             root,
             left_box,
+            mid_box: notch_box,
             right_box,
             clock_label,
             battery_label,
@@ -225,15 +244,22 @@ impl PillUi {
             media_title,
             files_icon,
             files_count,
+            files_pile,
+            last_pile: RefCell::new(String::new()),
             flash,
             flash_vel: Rc::new(Cell::new(0.0)),
             flash_tick: Rc::new(Cell::new(None)),
             w_cur: Rc::new(Cell::new(base_w as f64)),
             w_vel: Rc::new(Cell::new(0.0)),
             w_target: Rc::new(Cell::new(base_w as f64)),
+            h_cur: Rc::new(Cell::new(PILL_H as f64)),
+            h_vel: Rc::new(Cell::new(0.0)),
+            h_target: Rc::new(Cell::new(PILL_H as f64)),
             w_tick: Rc::new(Cell::new(None)),
             last_art_path: RefCell::new(None),
             last_mood: Cell::new(Mood::None),
+            base_w,
+            show_clock,
         };
         p.win.present();
         p.tick();
@@ -251,14 +277,8 @@ impl PillUi {
             self.clock_label
                 .set_text(&crate::timefmt::strftime_local(super::now_secs(), &fmt));
             let mood = self.update_mood(sh);
-            // only re-measure when mood actually changes — measure triggers layout + springs
-            if mood != self.last_mood.get() {
-                self.last_mood.set(mood);
-                self.relayout();
-            } else if mood == Mood::Timer || mood == Mood::Done {
-                // timer countdown text changes each second, but width is stable; no relayout needed
-                // keep size unless timer just appeared
-            }
+            self.last_mood.set(mood);
+            self.relayout();
         });
     }
 
@@ -296,30 +316,25 @@ impl PillUi {
                 }
             }
             let mood = self.update_mood(sh);
-            if mood != self.last_mood.get() {
-                self.last_mood.set(mood);
-                self.relayout();
-            }
+            self.last_mood.set(mood);
+            self.relayout();
         });
     }
 
     pub fn update_battery(&self) {
         super::with_shared(|sh| {
             let b = *sh.battery.borrow();
-            if !b.present || !sh.cfg.borrow().features.battery_chip {
-                self.battery_label.set_visible(false);
-                return;
-            }
-            self.battery_label.set_visible(true);
             let bolt = if b.charging { "⚡" } else { "" };
             self.battery_label
                 .set_text(&format!("{}{:.0}%", bolt, b.percent));
+            let mood = self.update_mood(sh);
+            self.last_mood.set(mood);
+            self.relayout();
         });
     }
 
     /// Decide which content pair is live. One pair at a time by priority:
-    /// timer done > running timer > playing music > files in the drop zone.
-    /// Returns the resolved mood so callers can gate relayout.
+    /// timer done > running timer > files on the shelf > playing music.
     fn update_mood(&self, sh: &Rc<Shared>) -> Mood {
         let features = sh.cfg.borrow().features.clone();
         let timer = sh.timer.borrow();
@@ -328,7 +343,6 @@ impl PillUi {
 
         let done_on = features.timer && sh.timer_done_until.get() > super::now_secs();
         let timer_on = features.timer && timer.as_ref().is_some_and(|t| t.remaining_secs() > 0);
-        // only consider media live when actually playing — paused/stopped shouldn't linger
         let music_on = features.media && media.as_ref().is_some_and(|s| s.playing);
         let files_on = features.shelf && count > 0;
 
@@ -336,10 +350,10 @@ impl PillUi {
             Mood::Done
         } else if timer_on {
             Mood::Timer
-        } else if music_on {
-            Mood::Media
         } else if files_on {
             Mood::Files
+        } else if music_on {
+            Mood::Media
         } else {
             Mood::None
         };
@@ -348,36 +362,82 @@ impl PillUi {
             self.timer_count.set_text(&fmt_mmss(secs));
         }
         if mood == Mood::Done {
-            self.timer_icon.set_text(super::g::CLOCK);
             self.timer_count.set_text("Done");
-        } else {
-            self.timer_icon.set_text(super::g::CLOCK);
         }
         if mood == Mood::Files {
             self.files_count.set_text(&format!("{}", count.min(99)));
+            self.rebuild_pile(sh);
+        } else if !self.last_pile.borrow().is_empty() {
+            *self.last_pile.borrow_mut() = String::new();
+            while let Some(c) = self.files_pile.first_child() {
+                self.files_pile.remove(&c);
+            }
+        }
+        if mood == Mood::Media {
+            if let Some(st) = media.as_ref() {
+                let t = if st.title.is_empty() {
+                    st.player.as_str()
+                } else {
+                    st.title.as_str()
+                };
+                self.media_title.set_text(t);
+            }
         }
 
-        // Pill collapsed state: for Media we show just a music icon (or 22px art) on the left
-        // — no right-side text to avoid the “cut off by notch” bug the user reported.
-        // Title/artist belong in the expanded Home Media widget, not the pill.
-        let art_ok = mood == Mood::Media && self.media_art.is_visible();
-        self.media_icon.set_visible(mood == Mood::Media && !art_ok);
-        self.media_art.set_visible(art_ok);
+        let live = mood != Mood::None;
+        let has_art = mood == Mood::Media && self.last_art_path.borrow().is_some();
+        self.media_icon.set_visible(mood == Mood::Media && !has_art);
+        self.media_art.set_visible(has_art);
+        self.media_art
+            .set_size_request(if live { 40 } else { 22 }, if live { 40 } else { 22 });
+        if live {
+            self.root.add_css_class("na-pill-live");
+        } else {
+            self.root.remove_css_class("na-pill-live");
+        }
 
-        let bubble_on = matches!(mood, Mood::Timer | Mood::Done | Mood::Files | Mood::Media);
-        // left bubble holds timer icon / music icon-art / files icon
-        self.left_box.set_visible(bubble_on);
-        // right bubble only for timer/files — media pill is icon-only to stay crisp
-        self.right_box
-            .set_visible(matches!(mood, Mood::Timer | Mood::Done | Mood::Files));
+        self.left_box.set_visible(live);
+        self.right_box.set_visible(live);
         let timer_page = matches!(mood, Mood::Timer | Mood::Done);
         self.timer_icon.set_visible(timer_page);
         self.timer_count.set_visible(timer_page);
-        // never show truncated title in the pill; Home widget shows full title
-        self.media_title.set_visible(false);
-        self.files_icon.set_visible(mood == Mood::Files);
+        self.media_title.set_visible(mood == Mood::Media);
+        let pile_on = mood == Mood::Files && self.files_pile.first_child().is_some();
+        self.files_icon.set_visible(mood == Mood::Files && !pile_on);
+        self.files_pile.set_visible(pile_on);
         self.files_count.set_visible(mood == Mood::Files);
+
+        // Camera hole stays `base_w` in the center. Live content lives on
+        // the ears so a physical notch does not eat the countdown.
+        self.mid_box
+            .set_size_request(self.base_w, if live { LIVE_H } else { PILL_H });
+        self.mid_box.set_hexpand(live);
+        self.clock_label
+            .set_visible(self.show_clock && mood == Mood::None);
+        let batt_ok = sh.battery.borrow().present && sh.cfg.borrow().features.battery_chip;
+        self.battery_label
+            .set_visible(batt_ok && mood == Mood::None);
         mood
+    }
+
+    fn rebuild_pile(&self, sh: &Rc<Shared>) {
+        let items = sh.shelf.borrow().items().to_vec();
+        let key: String = items.iter().rev().take(3).map(|i| i.id.as_str()).collect();
+        if *self.last_pile.borrow() == key {
+            return;
+        }
+        *self.last_pile.borrow_mut() = key;
+        while let Some(c) = self.files_pile.first_child() {
+            self.files_pile.remove(&c);
+        }
+        let size = 28;
+        for (i, item) in items.iter().rev().take(3).enumerate() {
+            let shot = mini_thumb(item, size);
+            if i > 0 {
+                shot.set_margin_start(-12);
+            }
+            self.files_pile.append(&shot);
+        }
     }
 
     /// Pulse the pill (timer finished, …). The cairo silhouette springs
@@ -409,37 +469,137 @@ impl PillUi {
         });
     }
 
-    /// Re-measure and spring the window width so it wraps notch + active bubbles.
+    fn min_w_for(&self, mood: Mood) -> i32 {
+        // Ears have to clear the physical camera. Idle fills the notch;
+        // live adds ~140px a side so "25:00" sits on the bezel, not in the hole.
+        let ears = match mood {
+            Mood::None => 0,
+            Mood::Timer | Mood::Done => 280,
+            Mood::Media => 360,
+            Mood::Files => 240,
+        };
+        match mood {
+            Mood::None => self.base_w,
+            _ => (self.base_w + ears).max(560),
+        }
+    }
+
+    fn h_for(mood: Mood) -> i32 {
+        if mood == Mood::None {
+            PILL_H
+        } else {
+            LIVE_H
+        }
+    }
+
+    fn apply_size(&self, w: i32, h: i32) {
+        apply_size(&self.win, &self.root, w, h);
+    }
+
+    /// Spring the window so live activities actually fit — wider and twice as tall.
     fn relayout(&self) {
-        let (_, nat, _, _) = self.root.measure(gtk4::Orientation::Horizontal, -1);
-        let target = nat.max(PILL_W) as f64;
-        self.w_target.set(target);
-        if (self.w_cur.get() - target).abs() < 1.0 {
-            self.win.set_width_request(target as i32);
+        let mood = self.last_mood.get();
+        let min = self.min_w_for(mood);
+        let w_tgt = if mood == Mood::None {
+            min as f64
+        } else {
+            let (_, nat, _, _) = self.root.measure(gtk4::Orientation::Horizontal, -1);
+            nat.max(min) as f64
+        };
+        let h_tgt = Self::h_for(mood) as f64;
+        let w_ok =
+            (self.w_target.get() - w_tgt).abs() < 2.0 && (self.w_cur.get() - w_tgt).abs() < 1.0;
+        let h_ok =
+            (self.h_target.get() - h_tgt).abs() < 2.0 && (self.h_cur.get() - h_tgt).abs() < 1.0;
+        if w_ok && h_ok {
+            return;
+        }
+        self.w_target.set(w_tgt);
+        self.h_target.set(h_tgt);
+        if (self.w_cur.get() - w_tgt).abs() < 1.0 && (self.h_cur.get() - h_tgt).abs() < 1.0 {
+            self.apply_size(w_tgt as i32, h_tgt as i32);
             return;
         }
         let w_cur = self.w_cur.clone();
         let w_vel = self.w_vel.clone();
         let w_target = self.w_target.clone();
+        let h_cur = self.h_cur.clone();
+        let h_vel = self.h_vel.clone();
+        let h_target = self.h_target.clone();
         let slot = self.w_tick.clone();
         let win = self.win.clone();
         let win_tick = win.clone();
+        let root = self.root.clone();
         motion::drive(&slot, &win_tick, move |dt| {
-            let tgt = w_target.get();
-            let (p, v) = Spring::SNAP.step(w_cur.get(), w_vel.get(), tgt, dt);
-            w_cur.set(p);
-            w_vel.set(v);
-            win.set_width_request(p.round() as i32);
-            if Spring::SNAP.settled(p, v, tgt) {
-                w_cur.set(tgt);
+            let wt = w_target.get();
+            let ht = h_target.get();
+            let (pw, vw) = Spring::SNAP.step(w_cur.get(), w_vel.get(), wt, dt);
+            let (ph, vh) = Spring::SNAP.step(h_cur.get(), h_vel.get(), ht, dt);
+            w_cur.set(pw);
+            w_vel.set(vw);
+            h_cur.set(ph);
+            h_vel.set(vh);
+            apply_size(&win, &root, pw.round() as i32, ph.round() as i32);
+            let w_done = Spring::SNAP.settled(pw, vw, wt);
+            let h_done = Spring::SNAP.settled(ph, vh, ht);
+            if w_done && h_done {
+                w_cur.set(wt);
                 w_vel.set(0.0);
-                win.set_width_request(tgt as i32);
+                h_cur.set(ht);
+                h_vel.set(0.0);
+                apply_size(&win, &root, wt.round() as i32, ht.round() as i32);
                 false
             } else {
                 true
             }
         });
     }
+}
+
+fn mini_thumb(item: &crate::shelf_store::ShelfItem, size: i32) -> gtk4::Box {
+    let wrap = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    wrap.set_css_classes(&["na-pile-shot"]);
+    wrap.set_size_request(size, size);
+    wrap.set_overflow(gtk4::Overflow::Hidden);
+    wrap.set_valign(gtk4::Align::Center);
+    if (item.kind == "image" || item.mime.starts_with("image/")) && !item.path.is_empty() {
+        if let Ok(tex) = gdk::Texture::from_filename(std::path::Path::new(&item.path)) {
+            let pic = gtk4::Picture::for_paintable(&tex);
+            pic.set_size_request(size, size);
+            pic.set_content_fit(gtk4::ContentFit::Cover);
+            wrap.append(&pic);
+            return wrap;
+        }
+    }
+    let glyph = match item.mime.as_str() {
+        m if m.starts_with("image/") => super::g::IMAGE,
+        m if m.starts_with("text/") => super::g::TEXT,
+        _ if item.kind == "text" => super::g::TEXT,
+        _ => super::g::FILE,
+    };
+    let l = label(&["na-glyph"], glyph);
+    l.set_halign(gtk4::Align::Center);
+    l.set_hexpand(true);
+    wrap.append(&l);
+    wrap
+}
+
+fn apply_size(win: &ApplicationWindow, root: &gtk4::Box, w: i32, h: i32) {
+    let w = w.max(1);
+    let h = h.max(1);
+    win.set_default_size(w, h);
+    win.set_size_request(w, h);
+    win.set_width_request(w);
+    win.set_height_request(h);
+    root.set_width_request(w);
+    root.set_height_request(h);
+    if let Some(c) = pill_canvas() {
+        c.set_content_width(w);
+        c.set_content_height(h);
+        c.set_size_request(w, h);
+        c.queue_draw();
+    }
+    win.queue_resize();
 }
 
 thread_local! {

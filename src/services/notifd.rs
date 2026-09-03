@@ -1,6 +1,5 @@
-use crate::services::{Banner, Event};
+use crate::services::{Banner, Event, EventTx};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::Sender;
 use zbus::object_server::SignalEmitter;
 use zbus::Connection;
 
@@ -10,9 +9,9 @@ pub enum NotifCmd {
 }
 
 struct Notifications {
-    tx: Sender<Event>,
+    tx: EventTx,
     counter: AtomicU32,
-    cmd_tx: std::sync::mpsc::Sender<NotifCmd>,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<NotifCmd>,
 }
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
@@ -45,7 +44,7 @@ impl Notifications {
                 pairs.push((c[0].clone(), c[1].clone()));
             }
         }
-        let _ = self.tx.send(Event::Notify(Banner {
+        self.tx.send(Event::Notify(Banner {
             id,
             app_name,
             icon: app_icon,
@@ -88,10 +87,10 @@ impl Notifications {
 /// Try to own org.freedesktop.Notifications and serve it.
 /// Returns the command sender used by the UI to close banners / invoke actions.
 /// Err when another daemon already owns the name (dunst/mako/etc).
-pub async fn run(tx: Sender<Event>) -> zbus::Result<Sender<NotifCmd>> {
+pub async fn run(tx: EventTx) -> zbus::Result<tokio::sync::mpsc::UnboundedSender<NotifCmd>> {
     let conn = Connection::session().await?;
 
-    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<NotifCmd>();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<NotifCmd>();
     let server = Notifications {
         tx: tx.clone(),
         counter: AtomicU32::new(100),
@@ -108,35 +107,31 @@ pub async fn run(tx: Sender<Event>) -> zbus::Result<Sender<NotifCmd>> {
         return Err(e);
     }
 
-    // Relay close/action commands into DBus signals
     let conn2 = conn.clone();
-    std::thread::spawn(move || {
-        while let Ok(cmd) = cmd_rx.recv() {
-            let conn3 = conn2.clone();
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async move {
-                    if let Ok(iface_ref) = conn3
-                        .object_server()
-                        .interface::<_, Notifications>("/org/freedesktop/Notifications")
-                        .await
-                    {
-                        let em = iface_ref.signal_emitter();
-                        match cmd {
-                            NotifCmd::Close { id, reason } => {
-                                let _ =
-                                    Notifications::notification_closed(em, id, reason as u32).await;
-                            }
-                            NotifCmd::Action { id, key } => {
-                                let _ = Notifications::action_invoked(em, id, key).await;
-                                let _ = Notifications::notification_closed(em, id, 2).await;
-                            }
-                        }
+    tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            if let Ok(iface_ref) = conn2
+                .object_server()
+                .interface::<_, Notifications>("/org/freedesktop/Notifications")
+                .await
+            {
+                let em = iface_ref.signal_emitter();
+                match cmd {
+                    NotifCmd::Close { id, reason } => {
+                        let _ = Notifications::notification_closed(em, id, reason as u32).await;
                     }
-                });
+                    NotifCmd::Action { id, key } => {
+                        let _ = Notifications::action_invoked(em, id, key).await;
+                        let _ = Notifications::notification_closed(em, id, 2).await;
+                    }
+                }
+            }
         }
+    });
+
+    tokio::spawn(async move {
+        std::future::pending::<()>().await;
+        drop(conn);
     });
 
     log::info!("naarchy owns org.freedesktop.Notifications");
