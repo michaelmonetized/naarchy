@@ -4,12 +4,12 @@ use super::home::drag_content;
 use super::{g, label, vbox, Shared};
 use crate::widget_store::WidgetKind;
 use gtk4::prelude::*;
-use gtk4::{DragSource, FlowBox, GestureClick};
+use gtk4::{DragSource, FlowBox, ToggleButton};
 use std::rc::Rc;
 
 pub struct DrawerPage {
     root: gtk4::Box,
-    items: Vec<(WidgetKind, gtk4::Box)>,
+    items: Vec<(WidgetKind, ToggleButton)>,
 }
 
 impl DrawerPage {
@@ -17,9 +17,10 @@ impl DrawerPage {
         let root = vbox(10);
         root.set_css_classes(&["na-panel-pad"]);
 
-        let hint = label(&["na-empty"], "Tap to pin on Home. Drag if you prefer.");
-        hint.set_halign(gtk4::Align::Center);
-        root.append(&hint);
+        root.append(&super::page_heading(
+            "Make it yours",
+            "Choose what lives on Home. Change your mind anytime.",
+        ));
 
         let grid = FlowBox::new();
         grid.set_max_children_per_line(4);
@@ -34,6 +35,14 @@ impl DrawerPage {
         let store = shared.widgets.borrow().clone();
         let mut items = Vec::new();
         for kind in WidgetKind::all() {
+            if (kind == WidgetKind::Media && !shared.cfg.borrow().features.media)
+                || (kind == WidgetKind::Timer && !shared.cfg.borrow().features.timer)
+            {
+                continue;
+            }
+            let button = ToggleButton::new();
+            button.set_has_frame(false);
+            button.set_active(store.has(kind));
             let item = vbox(8);
             item.set_css_classes(&["na-widget-item"]);
             let icon = label(&["na-widget-glyph"], kind.glyph());
@@ -45,6 +54,17 @@ impl DrawerPage {
             mark.set_css_classes(&["na-glyph", "na-mute"]);
             item.append(&icon);
             item.append(&name);
+            let detail = label(
+                &["na-widget-description"],
+                match kind {
+                    WidgetKind::Media => "Your music, in reach",
+                    WidgetKind::Timer => "Find your focus",
+                    WidgetKind::Clock => "A moment of clarity",
+                },
+            );
+            detail.set_wrap(true);
+            detail.set_justify(gtk4::Justification::Center);
+            item.append(&detail);
             item.append(&mark);
             if store.has(kind) {
                 item.add_css_class("na-on");
@@ -56,20 +76,20 @@ impl DrawerPage {
             let source = DragSource::new();
             source.set_actions(gtk4::gdk::DragAction::COPY);
             source.connect_prepare(move |_s, _x, _y| Some(drag_content(kind2)));
-            item.add_controller(source);
+            button.add_controller(source);
 
-            let click = GestureClick::new();
             {
                 let sh = shared.clone();
-                click.connect_released(move |_g, _n, _x, _y| {
+                button.connect_clicked(move |_| {
                     sh.widgets.borrow_mut().toggle(kind2);
                     crate::app::refresh_home();
                 });
             }
-            item.add_controller(click);
-
-            grid.append(&item);
-            items.push((kind, item));
+            button.set_child(Some(&item));
+            super::describe(&button, &format!("Show {} on Home", kind.name()));
+            button.set_cursor_from_name(Some("pointer"));
+            grid.append(&button);
+            items.push((kind, button));
         }
         root.append(&grid);
 
@@ -83,8 +103,10 @@ impl DrawerPage {
     pub fn rebuild(&self) {
         let on: Vec<WidgetKind> =
             super::with_shared(|sh| sh.widgets.borrow().widgets.clone()).unwrap_or_default();
-        for (kind, item) in &self.items {
+        for (kind, button) in &self.items {
+            let Some(item) = button.child() else { continue };
             let active = on.contains(kind);
+            button.set_active(active);
             if active {
                 item.add_css_class("na-on");
             } else {

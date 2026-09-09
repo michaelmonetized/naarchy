@@ -30,6 +30,8 @@ pub struct Appearance {
     pub panel_width: i32,
     pub panel_height: i32,
     pub opacity: f64,
+    /// Minimize spatial animation while preserving all interaction feedback.
+    pub reduce_motion: bool,
 }
 
 impl Default for Appearance {
@@ -50,6 +52,7 @@ impl Default for Appearance {
             panel_width: 680,
             panel_height: 460,
             opacity: 0.98,
+            reduce_motion: false,
         }
     }
 }
@@ -169,12 +172,24 @@ impl Default for ClockCfg {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct CalendarCfg {
     /// Public iCloud or Google Calendar ICS feed URLs. Fetched periodically.
     pub feeds: Vec<String>,
     pub refresh_min: u64,
+    /// Opt in to sending event addresses to geocoding/routing providers.
+    pub travel_times: bool,
+}
+
+impl Default for CalendarCfg {
+    fn default() -> Self {
+        Self {
+            feeds: Vec::new(),
+            refresh_min: 5,
+            travel_times: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -190,13 +205,47 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load(path: &Path) -> Config {
+    /// Apply only changed preferences, keeping unknown/advanced settings intact.
+    pub fn save_patch(changes: &[(&str, &str, toml::Value)]) -> Result<(), String> {
+        Self::save_patch_at(&crate::util::config_file(), changes)
+    }
+
+    fn save_patch_at(path: &Path, changes: &[(&str, &str, toml::Value)]) -> Result<(), String> {
+        let source = match std::fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(format!("Cannot read preferences: {error}")),
+        };
+        let mut document: toml::Table = toml::from_str(&source)
+            .map_err(|error| format!("Fix the existing configuration before saving: {error}"))?;
+        for (section, key, value) in changes {
+            let table = document
+                .entry(*section)
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+            let table = table
+                .as_table_mut()
+                .ok_or_else(|| format!("[{section}] must be a table"))?;
+            table.insert((*key).into(), value.clone());
+        }
+        let text = toml::to_string_pretty(&document).map_err(|e| e.to_string())?;
+        Self::from_toml(&text).ok_or("These preferences are not valid")?;
+        crate::util::atomic_write_private(path, text.as_bytes())
+            .map_err(|e| format!("Cannot save preferences: {e}"))
+    }
+
+    pub fn load(path: &Path) -> Result<Config, String> {
         match std::fs::read_to_string(path) {
-            Ok(s) => Self::from_toml(&s).unwrap_or_else(|| {
-                log::warn!("config parse error in {:?}; using defaults", path);
-                Config::default()
+            Ok(source) => Self::from_toml(&source).ok_or_else(|| {
+                format!(
+                    "invalid configuration at {}; fix it before starting Naarchy",
+                    path.display()
+                )
             }),
-            Err(_) => Config::default(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+            Err(error) => Err(format!(
+                "cannot read configuration at {}: {error}",
+                path.display()
+            )),
         }
     }
 
@@ -210,20 +259,37 @@ impl Config {
     /// `accent = "#7aa2f7"` default meant as "no override"; treat that as
     /// unspecified on purpose so the omarchy theme accent wins.
     fn normalize(&mut self) {
-        if self.appearance.omarchy && self.appearance.accent.as_deref() == Some("#7aa2f7") {
-            self.appearance.accent = None;
+        let a = &mut self.appearance;
+        if a.omarchy && a.accent.as_deref() == Some("#7aa2f7") {
+            a.accent = None;
         }
+        a.radius = a.radius.clamp(0, 64);
+        a.margin_top = a.margin_top.clamp(0, 256);
+        a.pill_width_notch = a.pill_width_notch.clamp(64, 800);
+        a.pill_width_island = a.pill_width_island.clamp(64, 800);
+        a.panel_width = a.panel_width.clamp(480, 1200);
+        a.panel_height = a.panel_height.clamp(400, 1000);
+        a.opacity = if a.opacity.is_finite() {
+            a.opacity.clamp(0.1, 1.0)
+        } else {
+            0.98
+        };
+        if !matches!(a.theme.as_str(), "auto" | "light" | "dark") {
+            a.theme = "auto".into();
+        }
+        self.behavior.hover_ms = self.behavior.hover_ms.clamp(50, 2000);
+        self.behavior.hover_band_px = self.behavior.hover_band_px.clamp(1, 64);
+        self.behavior.collapse_on_leave_ms = self.behavior.collapse_on_leave_ms.clamp(100, 10_000);
+        self.clipboard.max_entries = self.clipboard.max_entries.min(2000);
+        self.clipboard.max_image_bytes =
+            self.clipboard.max_image_bytes.clamp(1024, 32 * 1024 * 1024);
+        self.hud.timeout_ms = self.hud.timeout_ms.clamp(300, 30_000);
+        self.calendar.refresh_min = self.calendar.refresh_min.clamp(1, 1440);
     }
 
     pub fn save_default_if_missing(path: &Path) {
+        // Never rewrite an existing user config during startup.
         if path.exists() {
-            // migrate: ensure [calendar] exists for discoverability (old 0.1 installs)
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if !content.contains("[calendar]") {
-                    let snippet = "\n[calendar]\nfeeds = []            # public iCloud / Google ICS feed URLs (one per line)\n# feeds = [\"https://calendar.google.com/calendar/ical/xxxx/basic.ics\"]\nrefresh_min = 5\n";
-                    let _ = std::fs::write(path, format!("{}{}", content.trim_end(), snippet));
-                }
-            }
             return;
         }
         let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new("/")));
@@ -245,6 +311,7 @@ notch_mode = false        # true = hug a physical notch (~190px pill)
 panel_width = 680
 panel_height = 460
 opacity = 0.98
+reduce_motion = false
 
 [behavior]
 hover_open = true
@@ -276,14 +343,16 @@ show_in_pill = false     # the bar already has a clock
 [calendar]
 feeds = []            # public iCloud / Google ICS feed URLs (one per line)
 refresh_min = 5
+travel_times = false   # optional: IP location + event addresses sent to routing providers
 "##;
-        let _ = std::fs::write(path, default);
+        if let Err(error) = crate::util::atomic_write_private(path, default.as_bytes()) {
+            log::warn!("cannot create configuration: {error}");
+        }
     }
 }
 
 /// Watches the config file for changes and sends a fresh Config each time.
 pub struct ConfigWatcher {
-    #[allow(dead_code)]
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -292,21 +361,32 @@ impl ConfigWatcher {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop2 = stop.clone();
         std::thread::spawn(move || {
-            let mut last_content: Option<String> = None;
+            let mut last_stamp = None;
+            let mut last_content = std::fs::read_to_string(&path).ok();
             loop {
                 if stop2.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                let changed = last_content.as_deref() != Some(content.as_str());
-                if changed && !content.is_empty() {
-                    last_content = Some(content.clone());
-                    let cfg = Config::from_toml(&content).unwrap_or_else(|| {
-                        log::warn!("config reload parse error");
-                        Config::load(&path)
-                    });
-                    if tx.send(cfg).is_err() {
-                        break;
+                let stamp = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
+                if stamp != last_stamp {
+                    last_stamp = stamp;
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if last_content.as_deref() != Some(&content) {
+                            // Remember invalid contents to avoid repeated log spam.
+                            last_content = Some(content.clone());
+                            match Config::from_toml(&content) {
+                                Some(cfg) => {
+                                    if tx.send(cfg).is_err() {
+                                        break;
+                                    }
+                                }
+                                None => log::warn!(
+                                    "config reload rejected; keeping last valid settings"
+                                ),
+                            }
+                        }
                     }
                 }
                 std::thread::sleep(Duration::from_millis(1100));
@@ -316,9 +396,49 @@ impl ConfigWatcher {
     }
 }
 
+impl Drop for ConfigWatcher {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loaded_config_bounds_expensive_and_invalid_values() {
+        let cfg = Config::from_toml("[appearance]\npanel_width = -20\nopacity = nan\n[clipboard]\nmax_entries = 999999999\n[behavior]\nhover_ms = 0\n").unwrap();
+        assert_eq!(cfg.appearance.panel_width, 480);
+        assert!(cfg.appearance.opacity.is_finite());
+        assert_eq!(cfg.clipboard.max_entries, 2000);
+        assert_eq!(cfg.behavior.hover_ms, 50);
+        assert!(!cfg.calendar.travel_times);
+    }
+
+    #[test]
+    fn preferences_preserve_unknown_keys_and_reject_invalid_existing_config() {
+        let path =
+            std::env::temp_dir().join(format!("naarchy-config-test-{}.toml", std::process::id()));
+        std::fs::write(&path, "custom = 42\n[appearance]\naccent = \"#abcdef\"\n").unwrap();
+        Config::save_patch_at(
+            &path,
+            &[("appearance", "reduce_motion", toml::Value::Boolean(true))],
+        )
+        .unwrap();
+        let value: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["custom"].as_integer(), Some(42));
+        assert_eq!(value["appearance"]["accent"].as_str(), Some("#abcdef"));
+        std::fs::write(&path, "[broken").unwrap();
+        assert!(Config::load(&path).is_err());
+        assert!(Config::save_patch_at(
+            &path,
+            &[("appearance", "reduce_motion", toml::Value::Boolean(false))]
+        )
+        .is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[broken");
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn default_notifications_off() {

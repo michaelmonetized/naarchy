@@ -1,6 +1,7 @@
 # Theming
 
-Naarchy follows the desktop. Override only what you want to fight.
+Naarchy follows the desktop. Use native Preferences for the color scheme,
+opacity, and reduced motion, or edit the appearance section for finer control.
 
 ## Omarchy follow (default)
 
@@ -26,13 +27,16 @@ Portal map: 1 = prefer dark, 2 = prefer light, 0 = no preference → dark.
 omarchy = false
 theme = "dark"
 accent = "#89b4fa"
-pill_bg = "#000000"
-bg = "rgba(0,0,0,0.62)"
+bg = "#1e1e20"
 fg = "#cdd6f4"
 icon_font = "JetBrainsMono Nerd Font"
-radius = 24
 opacity = 0.98
+reduce_motion = false
 ```
+
+Colors must use `#RRGGBB` notation. `rgba()` values are not supported.
+Legacy `pill_bg` and `radius` settings are accepted in old configuration files,
+but the capsule renderer uses its theme palette and built-in shape instead.
 
 A leftover `accent = "#7aa2f7"` with `omarchy = true` is treated as unset so
 the theme accent wins.

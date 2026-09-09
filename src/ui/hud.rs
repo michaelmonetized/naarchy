@@ -14,9 +14,31 @@ pub struct HudManager {
     label: Option<Label>,
     timeout: Rc<Cell<Option<glib::SourceId>>>,
     tick: Rc<Cell<Option<gtk4::TickCallbackId>>>,
-    banners: Vec<ApplicationWindow>,
+    banners: Vec<BannerWindow>,
+    pending_banners: std::collections::VecDeque<Banner>,
     bells: Vec<ApplicationWindow>,
     bell_src: Rc<Cell<Option<glib::SourceId>>>,
+}
+
+const MAX_VISIBLE_BANNERS: usize = 3;
+const MAX_PENDING_BANNERS: usize = 32;
+
+struct BannerWindow {
+    id: u32,
+    generation: u64,
+    persistent: bool,
+    win: ApplicationWindow,
+    height: i32,
+    timeout: Rc<Cell<Option<glib::SourceId>>>,
+}
+
+impl Drop for BannerWindow {
+    fn drop(&mut self) {
+        if let Some(source) = self.timeout.take() {
+            source.remove();
+        }
+        self.win.destroy();
+    }
 }
 
 impl HudManager {
@@ -29,6 +51,7 @@ impl HudManager {
             timeout: Rc::new(Cell::new(None)),
             tick: Rc::new(Cell::new(None)),
             banners: Vec::new(),
+            pending_banners: std::collections::VecDeque::new(),
             bells: Vec::new(),
             bell_src: Rc::new(Cell::new(None)),
         }
@@ -102,52 +125,104 @@ impl HudManager {
     }
 
     pub fn show_banner(&mut self, b: Banner, shared: &Rc<super::Shared>) {
-        let Some(app) = self.app.upgrade() else {
-            return;
-        };
-        // cap concurrent banners — destroy oldest to free layer-shell surface
-        while self.banners.len() >= 3 {
-            if let Some(old) = self.banners.first() {
-                old.close();
+        if let Some(index) = self.banners.iter().position(|old| old.id == b.id) {
+            if self.banners[index].generation > b.generation {
+                return;
             }
-            self.banners.remove(0);
+            self.banners.remove(index);
+            if let Some(window) = self.build_banner(b, shared) {
+                self.banners.insert(index, window);
+            }
+            self.reflow();
+            return;
         }
-        let (win, _card) = make_banner_window(&app, &b, shared);
-        win.set_opacity(0.0);
-        let w_in = win.clone();
-        motion::tween(&win, 220, move |t| w_in.set_opacity(t), || {});
-        self.banners.push(win);
-        self.reflow();
-        // auto-dismiss non-critical (critical stays until dismissed)
-        if b.urgency != 2 && b.id != u32::MAX - 1 {
-            let wref = self.banners.last().map(|w| w.downgrade());
-            let cmd_tx = shared.notif_cmd.borrow().clone();
-            let id = b.id;
-            glib::timeout_add_local_once(std::time::Duration::from_millis(5_000), move || {
-                if let Some(w) = wref.and_then(|x| x.upgrade()) {
-                    let w2 = w.clone();
-                    motion::tween(
-                        &w,
-                        180,
-                        {
-                            let w3 = w.clone();
-                            move |t| w3.set_opacity(1.0 - t)
-                        },
-                        move || {
-                            w2.set_visible(false);
-                            if id != u32::MAX - 1 {
-                                if let Some(tx) = &cmd_tx {
-                                    let _ = tx.send(crate::services::notifd::NotifCmd::Close {
-                                        id,
-                                        reason: 1,
-                                    });
-                                }
-                            }
-                        },
-                    );
+        if let Some(old) = self.pending_banners.iter_mut().find(|old| old.id == b.id) {
+            if old.generation <= b.generation {
+                *old = b;
+            }
+            return;
+        }
+        if self.banners.len() >= MAX_VISIBLE_BANNERS {
+            if let Some(index) = self.banners.iter().position(|old| !old.persistent) {
+                let old = self.banners.remove(index);
+                dismiss_banner(shared, old.id, old.generation, 1);
+            } else {
+                // Explicitly persistent banners stay visible until dismissed.
+                // Queue a bounded number and reject overflow without replacing
+                // previously accepted persistent notifications.
+                if self.pending_banners.len() < MAX_PENDING_BANNERS {
+                    self.pending_banners.push_back(b);
+                } else {
+                    dismiss_banner(shared, b.id, b.generation, 4);
                 }
-            });
+                return;
+            }
         }
+        if let Some(window) = self.build_banner(b, shared) {
+            self.banners.push(window);
+        }
+        self.reflow();
+    }
+
+    fn build_banner(&self, b: Banner, shared: &Rc<super::Shared>) -> Option<BannerWindow> {
+        let app = self.app.upgrade()?;
+        let (win, card) = make_banner_window(&app, &b, shared);
+        let height = card.measure(gtk4::Orientation::Vertical, 376).1.max(66) + 12;
+        win.set_opacity(0.0);
+        let weak = win.downgrade();
+        motion::tween(
+            &win,
+            180,
+            move |t| {
+                if let Some(win) = weak.upgrade() {
+                    win.set_opacity(t);
+                }
+            },
+            || {},
+        );
+        let timeout = Rc::new(Cell::new(None));
+        if let Some(ms) = b.timeout_ms {
+            let slot = timeout.clone();
+            let shared = shared.clone();
+            let id = b.id;
+            let generation = b.generation;
+            let source = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(ms.max(1)),
+                move || {
+                    slot.set(None);
+                    dismiss_banner(&shared, id, generation, 1);
+                },
+            );
+            timeout.set(Some(source));
+        }
+        Some(BannerWindow {
+            id: b.id,
+            generation: b.generation,
+            persistent: b.timeout_ms.is_none(),
+            win,
+            height,
+            timeout,
+        })
+    }
+
+    /// Only close the notification generation that requested dismissal; an old
+    /// timeout must not remove a replacement received through another worker.
+    pub fn close_banner(&mut self, id: u32, generation: u64) {
+        self.banners
+            .retain(|banner| banner.id != id || banner.generation != generation);
+        self.pending_banners
+            .retain(|banner| banner.id != id || banner.generation != generation);
+        super::with_shared(|shared| {
+            while self.banners.len() < MAX_VISIBLE_BANNERS {
+                let Some(next) = self.pending_banners.pop_front() else {
+                    break;
+                };
+                if let Some(window) = self.build_banner(next, shared) {
+                    self.banners.push(window);
+                }
+            }
+        });
+        self.reflow();
     }
 
     /// Full-screen visual bell on every monitor. Click or any key dismisses
@@ -179,6 +254,9 @@ impl HudManager {
             areas.borrow_mut().push(area);
             self.bells.push(win);
         }
+        if motion::reduced() {
+            return;
+        }
         let src_slot = self.bell_src.clone();
         let areas2 = areas.clone();
         let src = glib::timeout_add_local(std::time::Duration::from_millis(32), move || {
@@ -202,10 +280,40 @@ impl HudManager {
     fn reflow(&mut self) {
         use gtk4_layer_shell::{Edge, LayerShell};
         // drop closed/hidden banners and free their surfaces
-        self.banners.retain(|w| w.is_visible());
-        for (i, w) in self.banners.iter().enumerate() {
-            w.set_margin(Edge::Top, 52 + (i as i32 * 78));
+        self.banners.retain(|banner| banner.win.is_visible());
+        let mut top = 84;
+        for banner in &self.banners {
+            banner.win.set_margin(Edge::Top, top);
+            top += banner.height + 10;
         }
+    }
+}
+
+impl Drop for HudManager {
+    fn drop(&mut self) {
+        if let Some(source) = self.timeout.take() {
+            source.remove();
+        }
+        if let Some(tick) = self.tick.take() {
+            tick.remove();
+        }
+        self.silence_bell();
+        if let Some(win) = self.win.take() {
+            win.destroy();
+        }
+    }
+}
+
+fn dismiss_banner(shared: &Rc<super::Shared>, id: u32, generation: u64, reason: u8) {
+    if let Some(tx) = shared.ui_tx.borrow().as_ref() {
+        tx.send(crate::services::Event::CloseBanner { id, generation });
+    }
+    if let Some(tx) = shared.notif_cmd.borrow().as_ref() {
+        let _ = tx.send(crate::services::notifd::NotifCmd::Close {
+            id,
+            reason,
+            generation,
+        });
     }
 }
 
@@ -400,14 +508,30 @@ pub fn make_banner_window(
     let ic = super::label(&["na-glyph"], super::g::INBOX);
     let sum = super::label(&["na-title"], &b.summary);
     sum.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    sum.set_hexpand(true);
+    sum.set_max_width_chars(34);
+    sum.set_xalign(0.0);
     let sp = super::label(&[""], "");
     sp.set_hexpand(true);
     head.append(&ic);
     head.append(&sum);
     head.append(&sp);
     if !b.app_name.is_empty() && b.app_name != "naarchy" {
-        head.append(&super::label(&["na-dim"], &b.app_name));
+        let app_name = super::label(&["na-dim"], &b.app_name);
+        app_name.set_max_width_chars(12);
+        app_name.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        app_name.set_single_line_mode(true);
+        app_name.set_tooltip_text(Some(&b.app_name));
+        head.append(&app_name);
     }
+    let close = gtk4::Button::with_label("×");
+    close.set_css_classes(&["na-banner-action"]);
+    super::describe(&close, "Dismiss notification");
+    let id = b.id;
+    let generation = b.generation;
+    let sh = shared.clone();
+    close.connect_clicked(move |_| dismiss_banner(&sh, id, generation, 2));
+    head.append(&close);
     card.append(&head);
 
     if !b.body.is_empty() {
@@ -415,49 +539,72 @@ pub fn make_banner_window(
         body.set_wrap(true);
         body.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
         body.set_max_width_chars(48);
+        body.set_lines(4);
+        body.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        body.set_xalign(0.0);
         card.append(&body);
     }
 
     if !b.actions.is_empty() {
-        let acts = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        let acts = gtk4::FlowBox::new();
+        acts.set_min_children_per_line(1);
+        acts.set_max_children_per_line(3);
+        acts.set_selection_mode(gtk4::SelectionMode::None);
+        acts.set_column_spacing(6);
+        acts.set_row_spacing(6);
+        acts.set_valign(gtk4::Align::Start);
         for (key, labeltxt) in &b.actions {
             let btn = gtk4::Button::with_label(labeltxt);
             btn.set_css_classes(&["na-banner-action"]);
+            super::describe(&btn, labeltxt);
+            if let Some(text) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+                text.set_max_width_chars(18);
+                text.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                text.set_single_line_mode(true);
+            }
             let cmd_tx = shared.notif_cmd.borrow().clone();
             let id = b.id;
+            let generation = b.generation;
             let key2 = key.clone();
-            let w2 = win.clone();
+            let sh = shared.clone();
             btn.connect_clicked(move |_| {
                 if let Some(tx) = &cmd_tx {
                     let _ = tx.send(crate::services::notifd::NotifCmd::Action {
                         id,
                         key: key2.clone(),
+                        generation,
                     });
                 }
-                w2.set_visible(false);
+                if let Some(tx) = sh.ui_tx.borrow().as_ref() {
+                    tx.send(crate::services::Event::CloseBanner { id, generation });
+                }
             });
             acts.append(&btn);
         }
-        card.append(&acts);
+        let actions_scroll = gtk4::ScrolledWindow::new();
+        actions_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
+        actions_scroll.set_max_content_height(120);
+        actions_scroll.set_propagate_natural_height(true);
+        actions_scroll.add_css_class("na-scroll");
+        actions_scroll.set_child(Some(&acts));
+        card.append(&actions_scroll);
     }
 
     win.set_child(Some(&card));
 
-    let click = gtk4::GestureClick::new();
-    {
-        let cmd_tx = shared.notif_cmd.borrow().clone();
-        let id = b.id;
-        let w2 = win.clone();
-        click.connect_released(move |_g, _n, _x, _y| {
-            w2.set_visible(false);
-            if id != u32::MAX - 1 {
-                if let Some(tx) = &cmd_tx {
-                    let _ = tx.send(crate::services::notifd::NotifCmd::Close { id, reason: 1 });
-                }
-            }
-        });
-    }
-    card.add_controller(click);
+    let key = gtk4::EventControllerKey::new();
+    let sh = shared.clone();
+    let id = b.id;
+    let generation = b.generation;
+    key.connect_key_pressed(move |_, key, _, _| {
+        if key == gdk::Key::Escape {
+            dismiss_banner(&sh, id, generation, 2);
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    win.add_controller(key);
 
     (win, card)
 }
@@ -496,9 +643,10 @@ fn make_bell_window(
     let area = DrawingArea::new();
     area.set_hexpand(true);
     area.set_vexpand(true);
+    let reduced = motion::reduced();
     area.set_draw_func(move |_da, cr, w, h| {
         let t = started.elapsed().as_secs_f64();
-        let a = bell_alpha(t);
+        let a = if reduced { 0.96 } else { bell_alpha(t) };
         cr.set_source_rgba(1.0, 0.97, 0.92, a);
         let _ = cr.paint();
         let label = "Time's up";

@@ -41,12 +41,15 @@ impl WidgetKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetStore {
     pub widgets: Vec<WidgetKind>,
+    #[serde(skip)]
+    path: Option<PathBuf>,
 }
 
 impl Default for WidgetStore {
     fn default() -> Self {
         Self {
             widgets: vec![WidgetKind::Timer, WidgetKind::Media],
+            path: None,
         }
     }
 }
@@ -60,29 +63,22 @@ impl WidgetStore {
     }
 
     pub fn load() -> Self {
-        let p = Self::path();
-        let mut store = match std::fs::read_to_string(&p) {
-            Ok(s) => parse_widgets(&s),
-            Err(_) => Self::default(),
-        };
-        // Clock is on the bar. Battery is gone. Drop leftovers so old
-        // widgets.json still loads instead of resetting the shelf.
-        let before = store.widgets.len();
-        store.widgets.retain(|k| *k != WidgetKind::Clock);
-        if store.widgets.len() != before {
-            store.save();
-        }
+        Self::open(Self::path())
+    }
+
+    /// Open a layout at an explicit path so tests and previews never change user preferences.
+    pub fn open(path: PathBuf) -> Self {
+        let mut store = crate::shelf_store::load_state::<serde_json::Value>(&path)
+            .map(|value| parse_widgets(&value.to_string()))
+            .unwrap_or_default();
+        store.path = Some(path);
         store
     }
 
-    pub fn save(&self) {
-        let p = Self::path();
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(p, s);
-        }
+    pub fn save(&self) -> bool {
+        self.path
+            .as_ref()
+            .is_none_or(|path| crate::shelf_store::save_state(path, self))
     }
 
     pub fn has(&self, kind: WidgetKind) -> bool {
@@ -94,17 +90,23 @@ impl WidgetStore {
             return false;
         }
         self.widgets.push(kind);
-        self.save();
-        true
+        if self.save() {
+            true
+        } else {
+            self.widgets.pop();
+            false
+        }
     }
 
     pub fn remove(&mut self, kind: WidgetKind) -> bool {
-        let n = self.widgets.len();
-        self.widgets.retain(|k| *k != kind);
-        if self.widgets.len() != n {
-            self.save();
+        let Some(index) = self.widgets.iter().position(|widget| *widget == kind) else {
+            return false;
+        };
+        self.widgets.remove(index);
+        if self.save() {
             true
         } else {
+            self.widgets.insert(index, kind);
             false
         }
     }
@@ -113,10 +115,10 @@ impl WidgetStore {
     pub fn toggle(&mut self, kind: WidgetKind) -> bool {
         if self.has(kind) {
             self.remove(kind);
-            false
+            self.has(kind)
         } else {
             self.add(kind);
-            true
+            self.has(kind)
         }
     }
 }
@@ -128,15 +130,19 @@ fn parse_widgets(s: &str) -> WidgetStore {
     let Some(arr) = v.get("widgets").and_then(|w| w.as_array()) else {
         return WidgetStore::default();
     };
-    let widgets: Vec<WidgetKind> = arr
+    let mut widgets = Vec::new();
+    for kind in arr
         .iter()
-        .filter_map(|x| x.as_str())
+        .filter_map(|value| value.as_str())
         .filter_map(WidgetKind::from_name)
-        .collect();
-    if widgets.is_empty() {
-        WidgetStore::default()
-    } else {
-        WidgetStore { widgets }
+    {
+        if !widgets.contains(&kind) {
+            widgets.push(kind);
+        }
+    }
+    WidgetStore {
+        widgets,
+        path: None,
     }
 }
 
@@ -162,8 +168,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_layout_and_clock_survive_parsing() {
+        assert!(parse_widgets(r#"{"widgets":[]}"#).widgets.is_empty());
+        assert_eq!(
+            parse_widgets(r#"{"widgets":["Clock","Clock"]}"#).widgets,
+            vec![WidgetKind::Clock]
+        );
+    }
+
+    #[test]
     fn old_json_drops_battery() {
         let s = parse_widgets(r#"{"widgets":["Timer","Media","Battery"]}"#);
         assert_eq!(s.widgets, vec![WidgetKind::Timer, WidgetKind::Media]);
+    }
+    #[test]
+    fn explicit_layout_roundtrips_without_touching_user_config() {
+        let dir =
+            std::env::temp_dir().join(format!("naarchy-widget-{}", crate::shelf_store::new_id()));
+        let path = dir.join("widgets.json");
+        let mut store = WidgetStore::open(path.clone());
+        store.remove(WidgetKind::Timer);
+        store.remove(WidgetKind::Media);
+        assert!(WidgetStore::open(path.clone()).widgets.is_empty());
+        assert!(store.add(WidgetKind::Clock));
+        assert_eq!(WidgetStore::open(path).widgets, vec![WidgetKind::Clock]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

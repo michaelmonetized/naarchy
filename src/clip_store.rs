@@ -1,41 +1,41 @@
-use crate::services::ClipEntry;
+use crate::services::{ClipEntry, ClipKind};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Default)]
 pub struct ClipStore {
+    /// Clipboard order is always newest first, independently of pinning.
     pub entries: Vec<ClipEntry>,
     path: PathBuf,
     blobs_dir: PathBuf,
 }
 
 impl ClipStore {
-    /// Load clipboard history from `$XDG_DATA_HOME/naarchy`.
-    ///
-    /// Missing `clipboard.json` yields an empty ring.
-    ///
-    /// Returns: a store rooted at the user data dir.
     pub fn load() -> Self {
         Self::open(crate::util::data_dir())
     }
 
-    /// Load (or create) a clipboard ring rooted at `dir`.
-    ///
-    /// Arguments:
-    /// - `dir`: directory holding `clipboard.json` and `blobs/`
-    ///
-    /// Returns: the store, creating the directory tree as needed.
+    /// Open private clipboard history. Invalid blob paths are never followed.
     pub fn open(dir: PathBuf) -> Self {
-        let blobs = dir.join("blobs");
-        let _ = std::fs::create_dir_all(&blobs);
         let path = dir.join("clipboard.json");
-        let entries = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Vec<ClipEntry>>(&b).ok())
-            .unwrap_or_default();
+        let blobs_dir = dir.join("blobs");
+        let mut entries: Vec<ClipEntry> = crate::shelf_store::load_state(&path).unwrap_or_default();
+        entries.retain(|entry| {
+            entry.kind != ClipKind::Image
+                || (crate::util::valid_blob_ref(&entry.data_ref)
+                    && blobs_dir.join(&entry.data_ref).is_file())
+        });
+        // Older releases reordered entries when pinning. Restore history order.
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.at));
+        for entry in &entries {
+            if entry.kind == ClipKind::Image {
+                crate::shelf_store::make_private(&blobs_dir.join(&entry.data_ref));
+            }
+        }
         Self {
             entries,
             path,
-            blobs_dir: blobs,
+            blobs_dir,
         }
     }
 
@@ -46,161 +46,161 @@ impl ClipStore {
         max_entries: usize,
         max_image: usize,
     ) -> bool {
-        use crate::services::ClipKind;
         let is_image = mime.starts_with("image/");
-        if is_image && data.len() > max_image {
+        if data.is_empty() || max_entries == 0 || (is_image && data.len() > max_image) {
             return false;
         }
-        // dedupe with newest
-        let key = crate::util::cache_key(data);
-        if let Some(first) = self.entries.first() {
-            let first_key = if first.kind == ClipKind::Image {
-                std::fs::read(self.blobs_dir.join(&first.data_ref))
-                    .map(|b| crate::util::cache_key(&b))
-            } else {
-                Ok(crate::util::cache_key(first.text.as_bytes()))
-            };
-            if first_key.map(|k| k == key).unwrap_or(false) {
-                return false;
-            }
-        }
-
-        let (kind, preview, text, data_ref) = if is_image {
-            (
-                ClipKind::Image,
-                "Image".to_string(),
-                String::new(),
-                format!("clip-{key}.bin"),
-            )
+        let data_ref = if is_image {
+            format!("clip-{}.bin", crate::util::cache_key(data))
         } else {
-            let text = String::from_utf8_lossy(data).into_owned();
-            let preview: String = text.chars().take(80).collect();
-            (ClipKind::Text, preview, text, String::new())
+            String::new()
         };
-
-        if kind == ClipKind::Image {
-            let _ = std::fs::write(self.blobs_dir.join(&data_ref), data);
+        let text = if is_image {
+            String::new()
+        } else {
+            String::from_utf8_lossy(data).into_owned()
+        };
+        let duplicate = self.entries.iter().position(|entry| {
+            entry.mime == mime
+                && if is_image {
+                    entry.kind == ClipKind::Image && entry.data_ref == data_ref
+                } else {
+                    entry.kind == ClipKind::Text && entry.text == text
+                }
+        });
+        if duplicate == Some(0) {
+            return false;
         }
-
-        self.entries.insert(
-            0,
+        let new_blob = (is_image
+            && duplicate.is_none()
+            && !self.entries.iter().any(|entry| entry.data_ref == data_ref))
+        .then(|| self.blobs_dir.join(&data_ref));
+        let mut next = self.entries.clone();
+        let entry = if let Some(index) = duplicate {
+            let mut entry = next.remove(index);
+            entry.at = crate::util::now_unix();
+            entry
+        } else {
+            if is_image {
+                if let Err(err) =
+                    crate::util::atomic_write_private(&self.blobs_dir.join(&data_ref), data)
+                {
+                    log::warn!("could not save clipboard image: {err}");
+                    return false;
+                }
+            }
             ClipEntry {
                 id: crate::shelf_store::new_id(),
-                kind,
-                mime: mime.to_string(),
-                preview,
+                kind: if is_image {
+                    ClipKind::Image
+                } else {
+                    ClipKind::Text
+                },
+                mime: mime.into(),
+                preview: if is_image {
+                    "Image".into()
+                } else {
+                    text.chars().take(80).collect()
+                },
                 text,
                 data_ref,
-                at: now(),
+                at: crate::util::now_unix(),
                 pinned: false,
-            },
-        );
-
-        let blobs = self.blobs_dir.clone();
-        let drop_img = |e: &crate::services::ClipEntry| {
-            if e.kind == crate::services::ClipKind::Image && !e.data_ref.is_empty() {
-                let _ = std::fs::remove_file(blobs.join(&e.data_ref));
             }
         };
-
-        let image_cap = 24.min(max_entries);
-        let image_count = self
-            .entries
-            .iter()
-            .filter(|e| e.kind == crate::services::ClipKind::Image && !e.pinned)
-            .count();
-        if image_count > image_cap {
-            let overflow = image_count - image_cap;
-            let mut removed = 0;
-            self.entries.reverse();
-            self.entries.retain(|e| {
-                if e.kind == crate::services::ClipKind::Image && !e.pinned && removed < overflow {
-                    drop_img(e);
-                    removed += 1;
-                    false
-                } else {
-                    true
+        next.insert(0, entry);
+        // One forward pass retains the newest entries and all pins.
+        let (mut count, mut images) = (0, 0);
+        next.retain(|entry| {
+            if entry.pinned {
+                return true;
+            }
+            if count >= max_entries {
+                return false;
+            }
+            if entry.kind == ClipKind::Image {
+                if images >= 24.min(max_entries) {
+                    return false;
                 }
-            });
-            self.entries.reverse();
+                images += 1;
+            }
+            count += 1;
+            true
+        });
+        let saved = self.commit(next);
+        if !saved {
+            if let Some(path) = new_blob {
+                let _ = std::fs::remove_file(path);
+            }
         }
-
-        let unpinned_count = self.entries.iter().filter(|e| !e.pinned).count();
-        let overflow = unpinned_count.saturating_sub(max_entries);
-        if overflow > 0 {
-            let mut removed = 0;
-            self.entries.reverse();
-            self.entries.retain(|e| {
-                if !e.pinned && removed < overflow {
-                    drop_img(e);
-                    removed += 1;
-                    false
-                } else {
-                    true
-                }
-            });
-            self.entries.reverse();
-        }
-        self.persist();
-        true
+        saved
     }
 
     pub fn toggle_pin(&mut self, id: &str) -> bool {
-        let mut changed = false;
-        for e in &mut self.entries {
-            if e.id == id {
-                e.pinned = !e.pinned;
-                changed = true;
-            }
-        }
-        if changed {
-            self.entries.sort_by_key(|e| !e.pinned);
-            self.persist();
-        }
-        changed
+        let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
+            return false;
+        };
+        let mut next = self.entries.clone();
+        next[index].pinned = !next[index].pinned;
+        self.commit(next)
     }
 
     pub fn remove(&mut self, id: &str) {
-        if let Some(e) = self.entries.iter().find(|e| e.id == id) {
-            self.drop_blob(e);
+        if !self.entries.iter().any(|entry| entry.id == id) {
+            return;
         }
-        self.entries.retain(|e| e.id != id);
-        self.persist();
+        self.commit(
+            self.entries
+                .iter()
+                .filter(|entry| entry.id != id)
+                .cloned()
+                .collect(),
+        );
     }
 
     pub fn clear_unpinned(&mut self) {
-        for e in self.entries.iter().filter(|e| !e.pinned) {
-            self.drop_blob(e);
+        if self.entries.iter().all(|entry| entry.pinned) {
+            return;
         }
-        self.entries.retain(|e| e.pinned);
-        self.persist();
+        self.commit(
+            self.entries
+                .iter()
+                .filter(|entry| entry.pinned)
+                .cloned()
+                .collect(),
+        );
     }
 
-    fn drop_blob(&self, e: &crate::services::ClipEntry) {
-        if e.kind == crate::services::ClipKind::Image && !e.data_ref.is_empty() {
-            let _ = std::fs::remove_file(self.blobs_dir.join(&e.data_ref));
+    pub fn blob_path(&self, reference: &str) -> PathBuf {
+        if crate::util::valid_blob_ref(reference) {
+            self.blobs_dir.join(reference)
+        } else {
+            self.blobs_dir.join(".invalid-blob-reference")
         }
     }
 
-    pub fn blob_path(&self, r: &str) -> PathBuf {
-        self.blobs_dir.join(r)
-    }
-
-    fn persist(&self) {
-        if let Ok(json) = serde_json::to_vec_pretty(&self.entries) {
-            let tmp = self.path.with_extension("tmp");
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.path);
+    fn commit(&mut self, next: Vec<ClipEntry>) -> bool {
+        if !crate::shelf_store::save_state(&self.path, &next) {
+            return false;
+        }
+        let retained: HashSet<&str> = next
+            .iter()
+            .filter(|entry| entry.kind == ClipKind::Image)
+            .map(|entry| entry.data_ref.as_str())
+            .collect();
+        // Delete only after the new index is durable, and only when no retained
+        // entry references the blob (older histories may contain duplicates).
+        for entry in &self.entries {
+            if entry.kind == ClipKind::Image
+                && !retained.contains(entry.data_ref.as_str())
+                && crate::util::valid_blob_ref(&entry.data_ref)
+            {
+                let _ = std::fs::remove_file(self.blobs_dir.join(&entry.data_ref));
             }
         }
+        self.entries = next;
+        true
     }
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -241,6 +241,57 @@ mod tests {
         assert_eq!(s.entries.len(), 4); // 3 unpinned cap + 1 pin
         assert!(s.entries.iter().any(|e| e.id == pin_id && e.pinned));
         assert!(!s.add_raw("image/png", &[0u8; 128], 3, 64)); // over image cap
+        cleanup(&dir);
+    }
+    #[test]
+    fn recopy_promotes_existing_item_and_pin_does_not_change_latest() {
+        let dir = tmp("naarchy-clip-recopy");
+        let mut store = ClipStore::open(dir.clone());
+        store.add_raw("text/plain", b"first", 3, 64);
+        let first = store.entries[0].id.clone();
+        store.add_raw("text/plain", b"second", 3, 64);
+        store.toggle_pin(&first);
+        assert_eq!(store.entries[0].text, "second");
+        assert!(store.add_raw("text/plain", b"first", 3, 64));
+        assert_eq!(store.entries.len(), 2);
+        assert_eq!(store.entries[0].id, first);
+        assert!(store.entries[0].pinned);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn removing_one_legacy_image_reference_preserves_the_other() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp("naarchy-clip-shared");
+        let mut store = ClipStore::open(dir.clone());
+        assert!(store.add_raw("image/png", b"image", 3, 64));
+        let path = store.blob_path(&store.entries[0].data_ref);
+        let mut duplicate = store.entries[0].clone();
+        duplicate.id = crate::shelf_store::new_id();
+        duplicate.pinned = true;
+        store.entries.push(duplicate);
+        let removed = store.entries[0].id.clone();
+        store.remove(&removed);
+        assert_eq!(std::fs::read(&path).unwrap(), b"image");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let retained = store.entries[0].id.clone();
+        store.remove(&retained);
+        assert!(!path.exists());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn failed_index_write_does_not_accept_clipboard_change() {
+        let dir = tmp("naarchy-clip-failure");
+        let mut store = ClipStore::open(dir.clone());
+        std::fs::create_dir(dir.join("clipboard.json")).unwrap();
+        assert!(!store.add_raw("text/plain", b"unsaved", 3, 64));
+        assert!(store.entries.is_empty());
+        assert!(!store.add_raw("text/plain", b"disabled", 0, 64));
+        assert!(store.blob_path("../outside").starts_with(dir.join("blobs")));
         cleanup(&dir);
     }
 }

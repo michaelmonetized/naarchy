@@ -15,7 +15,7 @@ pub const NOTCH_H: f64 = 67.0;
 pub const LIVE_H: f64 = 72.0;
 
 /// Transparent gutter so the card shadow never kisses the layer-shell rectangle.
-const EDGE_GUTTER: f64 = 40.0;
+pub const EDGE_GUTTER: f64 = 40.0;
 
 /// Panel layer width relative to `appearance.panel_width` (gutter around the card).
 pub const PANEL_WINDOW_SCALE: f64 = 1.22;
@@ -124,8 +124,8 @@ pub fn card_radii(w: f64, h: f64) -> (f64, f64) {
 
 /// Paint the open-state card.
 ///
-/// `fill` tints the otherwise-black island so an omarchy background still
-/// shows through a hair. `alpha` scales the whole card (no floor).
+/// Use the resolved palette in both light and dark modes. Opacity maps
+/// directly to the preference so high opacity remains readable over text.
 pub fn draw(cr: &Context, cap: Capsule, fill: (u8, u8, u8), alpha: f64) {
     if cap.w < 4.0 || cap.h < 4.0 {
         return;
@@ -153,12 +153,7 @@ pub fn draw(cr: &Context, cap: Capsule, fill: (u8, u8, u8), alpha: f64) {
     }
 
     path_notch(cr, cap.x, cap.y, cap.w, cap.h, rt, rb);
-    cr.set_source_rgba(
-        tr * 0.10,
-        tg * 0.10,
-        tb * 0.10,
-        (0.96 * gain).clamp(0.0, 1.0),
-    );
+    cr.set_source_rgba(tr, tg, tb, gain);
     let _ = cr.fill();
 
     let _ = cr.save();
@@ -248,6 +243,5 @@ mod tests {
         assert_eq!(NOTCH_W, 370.0);
         assert_eq!(NOTCH_H, 67.0);
         assert_eq!(LIVE_H, 72.0);
-        assert!(LIVE_H > NOTCH_H);
     }
 }

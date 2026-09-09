@@ -9,6 +9,11 @@ use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+pub fn reduced() -> bool {
+    super::with_shared(|sh| sh.cfg.borrow().appearance.reduce_motion).unwrap_or(false)
+        || gtk4::Settings::default().is_some_and(|s| !s.is_gtk_enable_animations())
+}
+
 /// Stiffness / damping / mass for a damped harmonic oscillator.
 #[derive(Clone, Copy, Debug)]
 pub struct Spring {
@@ -78,6 +83,17 @@ where
     if let Some(id) = slot.take() {
         id.remove();
     }
+    if reduced() {
+        // Settle the model synchronously; GTK coalesces these mutations into a
+        // single frame, including the driver's completion and cleanup actions.
+        let mut step = step;
+        for _ in 0..240 {
+            if !step(1.0 / 30.0) {
+                break;
+            }
+        }
+        return;
+    }
     let last = Cell::new(None::<i64>);
     let slot2 = slot.clone();
     let step = RefCell::new(step);
@@ -106,6 +122,11 @@ where
     F: Fn(f64) + 'static,
     D: FnOnce() + 'static,
 {
+    if reduced() {
+        apply(1.0);
+        done();
+        return;
+    }
     let start = Rc::new(Cell::new(None::<i64>));
     let done = Rc::new(RefCell::new(Some(done)));
     let dur = (ms.max(1) as f64) * 1_000.0; // µs

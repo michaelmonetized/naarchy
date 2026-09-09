@@ -16,8 +16,10 @@ pub struct CalendarPage {
     next_actions: gtk4::Box,
     list: gtk4::Box,
     empty: Label,
-    year: Cell<i32>,
-    month: Cell<u32>,
+    year: Rc<Cell<i32>>,
+    month: Rc<Cell<u32>>,
+    today: Cell<(i32, u32, u32)>,
+    agenda_minute: Cell<u64>,
 }
 
 impl CalendarPage {
@@ -37,6 +39,10 @@ impl CalendarPage {
         month_lbl.set_xalign(0.0);
         let prev = glyph_btn(&["na-btn"], g::CHEV_L);
         let next_m = glyph_btn(&["na-btn"], g::CHEV_R);
+        super::describe(&prev, "Previous month");
+        super::describe(&next_m, "Next month");
+        let today = Button::with_label("Today");
+        today.set_css_classes(&["na-preset"]);
         head.append(&month_lbl);
         head.append(&prev);
         head.append(&next_m);
@@ -49,6 +55,8 @@ impl CalendarPage {
         grid.set_row_spacing(2);
         grid.set_hexpand(true);
         left.append(&grid);
+        today.set_halign(Align::Center);
+        left.append(&today);
 
         let right = super::vbox(8);
         right.set_hexpand(true);
@@ -89,8 +97,10 @@ impl CalendarPage {
             next_actions: next_actions.clone(),
             list,
             empty,
-            year: Cell::new(y),
-            month: Cell::new(m),
+            year: Rc::new(Cell::new(y)),
+            month: Rc::new(Cell::new(m)),
+            today: Cell::new(timefmt::today_parts()),
+            agenda_minute: Cell::new(0),
         };
 
         {
@@ -132,6 +142,18 @@ impl CalendarPage {
             });
         }
 
+        {
+            let year = p.year.clone();
+            let month = p.month.clone();
+            let grid = p.grid.clone();
+            let month_lbl = p.month_lbl.clone();
+            today.connect_clicked(move |_| {
+                let (y, m, _) = timefmt::today_parts();
+                year.set(y);
+                month.set(m);
+                paint_month(&grid, &month_lbl, y, m);
+            });
+        }
         p.rebuild();
         p
     }
@@ -165,7 +187,11 @@ impl CalendarPage {
         self.empty.set_visible(events.is_empty());
 
         let now = super::now_secs();
-        let next_idx = events.iter().position(|e| e.start_epoch > now).unwrap_or(0);
+        self.agenda_minute.set(now / 60);
+        let next_idx = events
+            .iter()
+            .position(|e| e.start_epoch > now)
+            .unwrap_or(events.len().saturating_sub(1));
         if events.is_empty() {
             self.next.set_text("");
             self.next.set_visible(false);
@@ -222,11 +248,12 @@ impl CalendarPage {
     }
 
     pub fn tick(&self) {
-        let (y, m, _) = timefmt::today_parts();
-        if self.year.get() == 0 {
-            self.year.set(y);
-            self.month.set(m);
-            self.rebuild();
+        let today = timefmt::today_parts();
+        if self.today.replace(today) != today {
+            self.rebuild_grid();
+        }
+        if self.agenda_minute.get() != super::now_secs() / 60 {
+            self.rebuild_agenda();
         }
     }
 }
@@ -235,7 +262,7 @@ fn paint_month(grid: &gtk4::Grid, month_lbl: &Label, y: i32, m: u32) {
     while let Some(c) = grid.first_child() {
         grid.remove(&c);
     }
-    month_lbl.set_text(&format!("{}  {y}", timefmt::month_name(m).to_uppercase()));
+    month_lbl.set_text(&format!("{}  {y}", timefmt::month_name(m)));
 
     const WDS: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
     for (i, wd) in WDS.iter().enumerate() {

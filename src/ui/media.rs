@@ -2,7 +2,6 @@ use super::{g, glyph_btn, hbox, label, Shared};
 use gtk4::prelude::*;
 use gtk4::{gdk, Button, Label, Picture};
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
 pub struct MediaPage {
@@ -13,6 +12,7 @@ pub struct MediaPage {
     title: Label,
     artist: Label,
     play_btn: Button,
+    prev_btn: Button,
     next_btn: Button,
     last_art: std::cell::RefCell<Option<String>>,
 }
@@ -51,7 +51,7 @@ impl MediaPage {
         title.set_hexpand(true);
         title.set_halign(gtk4::Align::Fill);
         title.set_single_line_mode(true);
-        title.set_width_chars(18);
+        title.set_max_width_chars(24);
         let artist = label(&["na-media-artist"], "");
         artist.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         artist.set_xalign(0.0);
@@ -60,7 +60,7 @@ impl MediaPage {
         artist.set_wrap(true);
         artist.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
         artist.set_lines(2);
-        artist.set_width_chars(18);
+        artist.set_max_width_chars(24);
 
         let controls = hbox(8);
         controls.set_valign(gtk4::Align::Center);
@@ -71,6 +71,11 @@ impl MediaPage {
         let next_btn = glyph_btn(&["na-btn", "na-media-btn", "ghost"], g::NEXT);
         next_btn.set_tooltip_text(Some("Next"));
         next_btn.set_size_request(32, 32);
+        let prev_btn = glyph_btn(&["na-btn", "na-media-btn", "ghost"], g::PREV);
+        super::describe(&prev_btn, "Previous track");
+        prev_btn.set_size_request(32, 32);
+        super::describe(&next_btn, "Next track");
+        controls.append(&prev_btn);
         controls.append(&play_btn);
         controls.append(&next_btn);
 
@@ -81,17 +86,29 @@ impl MediaPage {
         player_row.append(&art_holder);
         player_row.append(&col);
 
-        let launch_row = hbox(12);
+        let launch_row = super::vbox(8);
         launch_row.set_css_classes(&["na-media-launchers"]);
         launch_row.set_valign(gtk4::Align::Center);
         launch_row.set_halign(gtk4::Align::Start);
         launch_row.set_hexpand(true);
-        let spotify_btn = launch_btn("spotify", "Open Spotify");
+        let spotify_btn = launch_btn("Spotify", "Open Spotify");
         let cliamp_btn = launch_btn("cliamp", "Open cliamp");
         spotify_btn.connect_clicked(|_| crate::util::launch_spotify());
         cliamp_btn.connect_clicked(|_| crate::util::launch_cliamp());
-        launch_row.append(&spotify_btn);
-        launch_row.append(&cliamp_btn);
+        let empty_title = label(&["na-empty-title"], "Set the mood");
+        empty_title.set_xalign(0.0);
+        let empty_detail = label(
+            &["na-dim"],
+            "Play something in your favorite app.\nYour music controls will appear here.",
+        );
+        empty_detail.set_xalign(0.0);
+        empty_detail.set_wrap(true);
+        launch_row.append(&empty_title);
+        launch_row.append(&empty_detail);
+        let launch_buttons = hbox(8);
+        launch_buttons.append(&spotify_btn);
+        launch_buttons.append(&cliamp_btn);
+        launch_row.append(&launch_buttons);
 
         root.append(&player_row);
         root.append(&launch_row);
@@ -105,6 +122,7 @@ impl MediaPage {
             artist,
             play_btn: play_btn.clone(),
             next_btn: next_btn.clone(),
+            prev_btn: prev_btn.clone(),
             last_art: std::cell::RefCell::new(None),
         };
 
@@ -133,6 +151,10 @@ impl MediaPage {
             next_btn.connect_clicked(move |_| send(&sh, crate::services::mpris::MediaCmd::Next));
         }
 
+        {
+            let sh = shared.clone();
+            prev_btn.connect_clicked(move |_| send(&sh, crate::services::mpris::MediaCmd::Prev));
+        }
         page.update();
         page
     }
@@ -142,10 +164,14 @@ impl MediaPage {
     }
 
     fn set_play_glyph(&self, playing: bool) {
-        self.play_btn.set_child(Some(&super::label(
-            &["na-glyph"],
-            if playing { g::PAUSE } else { g::PLAY },
-        )));
+        if let Some(label) = self
+            .play_btn
+            .child()
+            .and_then(|c| c.downcast::<Label>().ok())
+        {
+            super::set_label_text(&label, if playing { g::PAUSE } else { g::PLAY });
+        }
+        super::describe(&self.play_btn, if playing { "Pause" } else { "Play" });
     }
 
     pub fn update(&self) {
@@ -154,14 +180,18 @@ impl MediaPage {
             if let Some(st) = st.as_ref().filter(|s| s.is_live()) {
                 self.player_row.set_visible(true);
                 self.launch_row.set_visible(false);
-                self.title.set_text(if st.title.is_empty() {
-                    "Untitled"
-                } else {
-                    &st.title
-                });
-                self.artist.set_text(&artist_line(&st.artist, &st.album));
+                super::set_label_text(
+                    &self.title,
+                    if st.title.is_empty() {
+                        "Untitled"
+                    } else {
+                        &st.title
+                    },
+                );
+                super::set_label_text(&self.artist, &artist_line(&st.artist, &st.album));
                 self.set_play_glyph(st.playing);
-                self.play_btn.set_sensitive(true);
+                self.play_btn.set_sensitive(st.can_play);
+                self.prev_btn.set_sensitive(st.can_prev);
                 self.next_btn.set_sensitive(st.can_next);
 
                 if let Some(path) = st.art_path.clone() {
@@ -170,7 +200,10 @@ impl MediaPage {
                         while let Some(c) = self.art_holder.first_child() {
                             self.art_holder.remove(&c);
                         }
-                        if let Ok(tex) = gdk::Texture::from_filename(std::path::Path::new(&path)) {
+                        if let Ok(pixbuf) =
+                            gtk4::gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 128, 128, true)
+                        {
+                            let tex = gdk::Texture::for_pixbuf(&pixbuf);
                             let pic = Picture::for_paintable(&tex);
                             pic.set_size_request(64, 64);
                             pic.set_content_fit(gtk4::ContentFit::Cover);
@@ -180,9 +213,7 @@ impl MediaPage {
                                 .append(&label(&["na-glyph", "lg", "na-dim"], g::MUSIC));
                         }
                     }
-                } else if self.last_art.borrow().is_some()
-                    || self.art_holder.first_child().is_some()
-                {
+                } else if self.last_art.borrow().is_some() {
                     *self.last_art.borrow_mut() = None;
                     while let Some(c) = self.art_holder.first_child() {
                         self.art_holder.remove(&c);
@@ -196,7 +227,11 @@ impl MediaPage {
             } else {
                 self.player_row.set_visible(false);
                 self.launch_row.set_visible(true);
-                *self.last_art.borrow_mut() = None;
+                if self.last_art.borrow_mut().take().is_some() {
+                    while let Some(child) = self.art_holder.first_child() {
+                        self.art_holder.remove(&child);
+                    }
+                }
             }
         });
     }
@@ -215,53 +250,13 @@ fn artist_line(artist: &str, album: &str) -> String {
     }
 }
 
-fn launch_btn(icon_name: &str, tooltip: &str) -> Button {
-    let btn = Button::new();
+fn launch_btn(name: &str, tooltip: &str) -> Button {
+    let btn = Button::with_label(name);
     btn.set_has_frame(false);
-    btn.set_css_classes(&["na-btn", "na-media-launch"]);
-    btn.set_tooltip_text(Some(tooltip));
-    btn.set_size_request(56, 56);
-    btn.set_overflow(gtk4::Overflow::Hidden);
-    btn.set_cursor(gdk::Cursor::from_name("pointer", None).as_ref());
-    btn.set_child(Some(&launch_icon(icon_name, 48)));
+    btn.set_css_classes(&["na-btn", "ghost"]);
+    super::describe(&btn, tooltip);
+    btn.set_cursor_from_name(Some("pointer"));
     btn
-}
-
-fn launch_icon(name: &str, px: i32) -> gtk4::Image {
-    if let Some(display) = gdk::Display::default() {
-        let theme = gtk4::IconTheme::for_display(&display);
-        if theme.has_icon(name) {
-            let img = gtk4::Image::from_icon_name(name);
-            img.set_pixel_size(px);
-            return img;
-        }
-    }
-    if let Some(path) = icon_path(name) {
-        if let Ok(tex) = gdk::Texture::from_filename(&path) {
-            let img = gtk4::Image::from_paintable(Some(&tex));
-            img.set_pixel_size(px);
-            return img;
-        }
-    }
-    let img = gtk4::Image::from_icon_name(name);
-    img.set_pixel_size(px);
-    img
-}
-
-fn icon_path(name: &str) -> Option<PathBuf> {
-    let mut cands = Vec::new();
-    if let Some(d) = dirs::data_dir() {
-        cands.push(d.join(format!("icons/hicolor/512x512/apps/{name}.png")));
-        cands.push(d.join(format!("icons/hicolor/256x256/apps/{name}.png")));
-    }
-    cands.push(PathBuf::from(format!(
-        "/usr/share/icons/hicolor/512x512/apps/{name}.png"
-    )));
-    cands.push(PathBuf::from(format!(
-        "/usr/share/icons/hicolor/256x256/apps/{name}.png"
-    )));
-    cands.push(PathBuf::from(format!("/usr/share/pixmaps/{name}.png")));
-    cands.into_iter().find(|p| p.is_file())
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ impl PanelUi {
         content.set_margin_top((super::liquid::NOTCH_H as i32) + 10);
         content.set_margin_start(28);
         content.set_margin_end(28);
-        content.set_margin_bottom(8);
+        content.set_margin_bottom(liquid::EDGE_GUTTER as i32 + 8);
         content.set_hexpand(false);
         content.set_halign(gtk4::Align::Center);
         content.set_width_request(content_w);
@@ -101,7 +101,7 @@ impl PanelUi {
 
         let stack = Stack::new();
         stack.set_transition_type(gtk4::StackTransitionType::Crossfade);
-        stack.set_transition_duration(180);
+        stack.set_transition_duration(if motion::reduced() { 0 } else { 180 });
         stack.set_vexpand(true);
         let first = ToggleButton::new();
 
@@ -169,15 +169,24 @@ impl PanelUi {
                 };
                 b.set_css_classes(&["na-dock-btn"]);
                 let l = label(&["na-dock-glyph"], glyph);
-                b.set_child(Some(&l));
-                b.set_tooltip_text(Some(tip));
+                let dock_item = hbox(8);
+                dock_item.set_margin_start(12);
+                dock_item.set_margin_end(12);
+                dock_item.append(&l);
+                dock_item.append(&label(&["na-dock-label"], t.label()));
+                b.set_child(Some(&dock_item));
+                super::describe(&b, tip);
                 let sh = shared.clone();
                 let stack2 = stack.clone();
+                let clips = clip_page.clone();
                 let t2 = *t;
                 b.connect_toggled(move |btn| {
                     if btn.is_active() {
                         sh.tab.set(t2);
                         stack2.set_visible_child_name(tab_name(t2));
+                        if t2 == Tab::Clipboard {
+                            clips.reload(None);
+                        }
                         crate::app::poke_panels();
                     }
                 });
@@ -202,15 +211,16 @@ impl PanelUi {
         dock_wrap.set_margin_top(4);
         dock_wrap.set_opacity(0.0);
         dock_wrap.append(&dock);
-        // Settings — opens ~/.config/naarchy/config.toml in nvim via omarchy-launch-config-editor
+        // Preferences stay available without leaving the desktop flow.
         {
             let settings = crate::ui::glyph_btn(&["na-dock-btn", "na-settings-btn"], g::SETTINGS);
-            settings.set_tooltip_text(Some("Settings — Edit config in Neovim"));
+            super::describe(&settings, "Settings");
             // ensure pointer cursor not text caret
             settings.set_cursor(gdk::Cursor::from_name("pointer", None).as_ref());
             settings.set_focusable(true);
-            settings.connect_clicked(|_| {
-                crate::util::open_config_in_editor();
+            let app = app.clone();
+            settings.connect_clicked(move |_| {
+                super::preferences::show(&app);
             });
             dock_wrap.append(&settings);
         }
@@ -261,20 +271,49 @@ impl PanelUi {
         overlay.add_overlay(&shell);
         overlay.add_overlay(&drop_revealer);
         win.set_child(Some(&overlay));
-        attach_file_drop(&win);
-        attach_file_drop(home_page.root());
-        attach_file_drop(shelf_page.root());
-        attach_file_drop(clip_page.root());
-        attach_file_drop(drawer_page.root());
-        attach_file_drop(cal_page.root());
-        attach_file_drop(&drop_box);
+        if shared.cfg.borrow().features.shelf {
+            attach_file_drop(&win);
+            attach_file_drop(home_page.root());
+            attach_file_drop(shelf_page.root());
+            attach_file_drop(clip_page.root());
+            attach_file_drop(drawer_page.root());
+            attach_file_drop(cal_page.root());
+            attach_file_drop(&drop_box);
+        }
 
         {
             let key = gtk4::EventControllerKey::new();
-            key.connect_key_pressed(move |_k, keyval, _code, _mod| {
+            let buttons = dock_buttons.clone();
+            let clips = clip_page.clone();
+            key.connect_key_pressed(move |_k, keyval, _code, modifiers| {
                 if keyval == gdk::Key::Escape {
                     crate::app::request_collapse_all();
                     gtk4::glib::Propagation::Stop
+                } else if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+                    if keyval == gdk::Key::f || keyval == gdk::Key::F {
+                        if let Some((_, button)) =
+                            buttons.iter().find(|(tab, _)| *tab == Tab::Clipboard)
+                        {
+                            button.set_active(true);
+                            clips.focus_search();
+                            return gtk4::glib::Propagation::Stop;
+                        }
+                    }
+                    let index = match keyval {
+                        gdk::Key::_1 => Some(0),
+                        gdk::Key::_2 => Some(1),
+                        gdk::Key::_3 => Some(2),
+                        gdk::Key::_4 => Some(3),
+                        gdk::Key::_5 => Some(4),
+                        _ => None,
+                    };
+                    if let Some((_, button)) = index.and_then(|i| buttons.get(i)) {
+                        button.set_active(true);
+                        button.grab_focus();
+                        gtk4::glib::Propagation::Stop
+                    } else {
+                        gtk4::glib::Propagation::Proceed
+                    }
                 } else {
                     gtk4::glib::Propagation::Proceed
                 }
@@ -319,6 +358,10 @@ impl PanelUi {
         p.clip_page.reload(None);
         p.cal_page.rebuild();
         p.media_update();
+        // GTK 4.22's Wayland session cleanup assumes every application window
+        // has a native surface, including a hidden panel removed on hotplug.
+        // Realize while its monitor is valid; this does not map or show it.
+        gtk4::prelude::WidgetExt::realize(&p.win);
         p
     }
 
@@ -343,8 +386,18 @@ impl PanelUi {
     }
 
     pub fn collapse_now(&self) {
+        self.cancel_collapse_timer();
+        if let Some(tick) = self.tick.take() {
+            tick.remove();
+        }
         self.target.set(0.0);
-        self.start_anim();
+        self.progress.set(0.0);
+        self.vel.set(0.0);
+        self.content.set_opacity(0.0);
+        self.dock.set_opacity(0.0);
+        self.dock_wrap.set_opacity(0.0);
+        liquid::clear_input_region(&self.win);
+        self.win.set_visible(false);
     }
 
     pub fn poke_collapse_timer(&self) {
@@ -418,9 +471,9 @@ impl PanelUi {
             dock_wrap.set_opacity(d_op);
 
             // throttle input region updates to ~20Hz to avoid per-frame layout + Wayland round-trip
-            let f = frame.get().wrapping_add(1);
-            frame.set(f);
-            let should_update_region = f % 3 == 0 || spring.settled(p, v, tgt);
+            let f = frame.get() + 1;
+            frame.set(if f == 3 { 0 } else { f });
+            let should_update_region = f == 3 || spring.settled(p, v, tgt);
             if should_update_region {
                 let ww = win.width().max(1) as f64;
                 let wh = win.height().max(1) as f64;
@@ -459,10 +512,22 @@ impl PanelUi {
     }
 
     pub fn show_tab(&self, t: Tab) {
+        let previous = self.stack.visible_child_name();
+        let t = if self.dock_buttons.iter().any(|(tab, _)| *tab == t) {
+            t
+        } else {
+            Tab::Home
+        };
         for (tab, b) in &self.dock_buttons {
             b.set_active(*tab == t);
         }
         self.stack.set_visible_child_name(tab_name(t));
+        match t {
+            Tab::Home => self.home_page.tick(),
+            Tab::Calendar => self.cal_page.tick(),
+            Tab::Clipboard if previous.as_deref() == Some("clip") => self.clip_page.reload(None),
+            _ => {}
+        }
     }
 
     pub fn media_update(&self) {
@@ -483,14 +548,24 @@ impl PanelUi {
         self.drawer_page.rebuild();
     }
     pub fn tick(&self) {
-        self.home_page.tick();
-        self.cal_page.tick();
+        if !self.win.is_visible() {
+            return;
+        }
+        match self.stack.visible_child_name().as_deref() {
+            Some("home") => self.home_page.tick(),
+            Some("cal") => self.cal_page.tick(),
+            _ => {}
+        }
     }
-    pub fn timer_start(&self, secs: u64) {
-        self.home_page.timer_start(secs);
-    }
-    pub fn redraw(&self) {
-        self.bg.queue_draw();
+}
+
+impl Drop for PanelUi {
+    fn drop(&mut self) {
+        self.cancel_collapse_timer();
+        if let Some(tick) = self.tick.take() {
+            tick.remove();
+        }
+        self.win.destroy();
     }
 }
 
@@ -508,6 +583,7 @@ fn file_drop_formats() -> gdk::ContentFormats {
     gdk::ContentFormats::builder()
         .add_type(gdk::FileList::static_type())
         .add_type(gdk::Texture::static_type())
+        .add_type(String::static_type())
         .add_mime_type("text/uri-list")
         .add_mime_type("text/plain;charset=utf-8")
         .add_mime_type("text/plain")
@@ -540,73 +616,85 @@ pub(crate) fn attach_file_drop(widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
 
 /// Interpret a dropped GDK Value and store it on the shelf.
 pub(crate) fn handle_dropped_value(shared: &Rc<Shared>, value: &glib::Value) {
+    let mut files = Vec::new();
+    let mut texts = Vec::new();
     if let Ok(list) = value.get::<gdk::FileList>() {
-        for f in list.files() {
-            if let Some(p) = f.path() {
-                shared.shelf.borrow_mut().add_file(&p.to_string_lossy());
-            } else {
-                let uri = f.uri();
-                if let Some(rest) = uri.strip_prefix("file://") {
-                    shared.shelf.borrow_mut().add_file(&uri_unescape(rest));
-                } else if !uri.is_empty() {
-                    shared.shelf.borrow_mut().add_text(&uri);
-                }
+        for file in list.files() {
+            if let Some(path) = file.path() {
+                files.push(path.to_string_lossy().into_owned());
+            } else if !file.uri().is_empty() {
+                texts.push(file.uri().to_string());
             }
         }
-        crate::app::refresh_after_shelf_change();
-        return;
-    }
-    if let Ok(tex) = value.get::<gdk::Texture>() {
-        let tmp = std::env::temp_dir().join(format!("naarchy-drop-{}.png", std::process::id()));
-        if tex.save_to_png(&tmp).is_ok() {
-            let bytes = std::fs::read(&tmp).unwrap_or_default();
-            let _ = std::fs::remove_file(&tmp);
-            shared.shelf.borrow_mut().add_image(bytes);
-            crate::app::refresh_after_shelf_change();
-            return;
-        }
-    }
-    let s = value
+    } else if let Ok(texture) = value.get::<gdk::Texture>() {
+        // Encode in memory: no temporary-file race or redundant disk roundtrip.
+        shared
+            .shelf
+            .borrow_mut()
+            .add_image(texture.save_to_png_bytes().to_vec());
+    } else if let Ok(text) = value
         .get::<String>()
-        .or_else(|_| value.get::<glib::GString>().map(|g| g.to_string()));
-    if let Ok(s) = s {
-        for item in parse_payload(&s) {
+        .or_else(|_| value.get::<glib::GString>().map(|s| s.to_string()))
+    {
+        for item in parse_payload(&text) {
             match item {
-                PayloadKind::File(p) => {
-                    shared.shelf.borrow_mut().add_file(&p);
-                }
-                PayloadKind::Text(t) => {
-                    shared.shelf.borrow_mut().add_text(&t);
-                }
+                PayloadKind::File(path) => files.push(path),
+                PayloadKind::Text(text) => texts.push(text),
             }
         }
-        crate::app::refresh_after_shelf_change();
     }
+    {
+        let mut shelf = shared.shelf.borrow_mut();
+        shelf.add_files(&files);
+        shelf.add_texts(&texts);
+    }
+    crate::app::refresh_after_shelf_change();
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PayloadKind {
     File(String),
     Text(String),
 }
 
-pub(crate) fn parse_payload(s: &str) -> Vec<PayloadKind> {
-    let mut out = Vec::new();
-    let single_line = s.lines().count() == 1;
-    for line in s.split('\n') {
-        let l = line.trim_end_matches('\r').trim();
-        if l.is_empty() {
-            continue;
-        }
-        if let Some(rest) = l.strip_prefix("file://") {
-            let path = uri_unescape(rest);
-            out.push(PayloadKind::File(path));
-        } else if l.starts_with('/') {
-            out.push(PayloadKind::File(l.to_string()));
-        } else if looks_like_url(l) || single_line {
-            out.push(PayloadKind::Text(l.to_string()));
-        }
+pub(crate) fn parse_payload(text: &str) -> Vec<PayloadKind> {
+    let lines: Vec<_> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return Vec::new();
     }
-    out
+    // A URI list can have comment lines. Ordinary multiline text is one clip,
+    // preserving its original whitespace and line breaks.
+    let has_target = lines.iter().any(|line| !line.starts_with('#'));
+    let uri_list = has_target
+        && lines.iter().all(|line| {
+            line.starts_with('#')
+                || line.starts_with("file://")
+                || line.starts_with('/')
+                || looks_like_url(line)
+        });
+    if !uri_list {
+        return vec![PayloadKind::Text(text.to_string())];
+    }
+    lines
+        .into_iter()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| {
+            if line.starts_with("file://") {
+                gtk4::gio::File::for_uri(line)
+                    .path()
+                    .map(|path| PayloadKind::File(path.to_string_lossy().into_owned()))
+                    .unwrap_or_else(|| PayloadKind::Text(line.to_string()))
+            } else if line.starts_with('/') {
+                PayloadKind::File(line.to_string())
+            } else {
+                PayloadKind::Text(line.to_string())
+            }
+        })
+        .collect()
 }
 
 fn looks_like_url(s: &str) -> bool {
@@ -616,23 +704,30 @@ fn looks_like_url(s: &str) -> bool {
         || s.starts_with("mailto:")
 }
 
-pub(crate) fn uri_unescape(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (
-                (bytes[i + 1] as char).to_digit(16),
-                (bytes[i + 2] as char).to_digit(16),
-            ) {
-                out.push(((h << 4) | l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
+#[cfg(test)]
+mod payload_tests {
+    use super::{parse_payload, PayloadKind};
+
+    #[test]
+    fn multiline_text_keeps_its_structure() {
+        let text = "First line\n  indented second line\n";
+        assert_eq!(parse_payload(text), vec![PayloadKind::Text(text.into())]);
     }
-    String::from_utf8_lossy(&out).into_owned()
+
+    #[test]
+    fn uri_lists_decode_paths_and_ignore_comments() {
+        assert_eq!(
+            parse_payload("# Files\r\nfile:///tmp/one%20two.txt\r\nfile://localhost/tmp/three.txt"),
+            vec![
+                PayloadKind::File("/tmp/one two.txt".into()),
+                PayloadKind::File("/tmp/three.txt".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_prose_and_urls_stays_one_text_item() {
+        let text = "Read this:\nhttps://example.com";
+        assert_eq!(parse_payload(text), vec![PayloadKind::Text(text.into())]);
+    }
 }

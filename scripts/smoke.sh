@@ -3,7 +3,7 @@ set -euo pipefail
 
 BIN="${BIN:-./target/debug/naarchy}"
 if [[ ! -x "$BIN" ]]; then
-  cargo build --bins
+  cargo build --locked --bins
   BIN=./target/debug/naarchy
 fi
 
@@ -11,6 +11,21 @@ fi
 SMOKE_RT="$(mktemp -d /tmp/naarchy-smoke-rt.XXXXXX)"
 trap 'rm -rf "$SMOKE_RT"' EXIT
 export XDG_RUNTIME_DIR="$SMOKE_RT"
+export XDG_CONFIG_HOME="$SMOKE_RT/config"
+export XDG_DATA_HOME="$SMOKE_RT/data"
+export XDG_CACHE_HOME="$SMOKE_RT/cache"
+
+"$BIN" --version | grep -E '^naarchy [0-9]+\.[0-9]+\.[0-9]+'
+"$BIN" doctor >/dev/null
+[[ "$("$BIN" shelf list)" == '[]' ]]
+
+for duration in 0 999999999999999999999999h invalid; do
+  set +e
+  "$BIN" timer "$duration" >/dev/null 2>&1
+  ec=$?
+  set -e
+  [[ "$ec" -eq 2 ]]
+done
 
 # help lists the real tabs (grep the tab *usage line* so a later "media widget"
 # one-liner cannot false-positive)
@@ -57,5 +72,12 @@ if echo "$binds" | grep -Fq 'tab shelf'; then
 fi
 echo "$binds" | grep -F 'layerrule = blur, naarchy'
 echo "$binds" | grep -F 'dbus-update-activation-environment'
+
+# Exercise installation in a temporary staging tree, never the real desktop.
+DESTDIR="$SMOKE_RT/install" PREFIX=/usr XDG_CONFIG_HOME=/home/test/.config \
+  bash scripts/install.sh "$BIN" >/dev/null
+[[ -x "$SMOKE_RT/install/usr/bin/naarchy" ]]
+[[ -f "$SMOKE_RT/install/usr/share/icons/hicolor/scalable/apps/app.naarchy.Naarchy.svg" ]]
+grep -Fq 'ExecStart="/usr/bin/naarchy" run' "$SMOKE_RT/install/home/test/.config/systemd/user/naarchy.service"
 
 echo "smoke ok"

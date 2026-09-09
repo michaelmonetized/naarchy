@@ -1,13 +1,18 @@
 # Config
 
-Path: `~/.config/naarchy/config.toml` (`~/.config/naarchy/config.toml:1` in your screenshot — hot-reloads on save, settings gear opens it in Neovim via `omarchy-launch-config-editor`).
+Path: `$XDG_CONFIG_HOME/naarchy/config.toml` (normally `~/.config/naarchy/config.toml`).
+The settings button opens native Preferences. Its advanced configuration action
+opens this file in your desktop editor. Preferences updates only the settings you
+changed, preserving other settings. Saving through Preferences removes TOML
+comments; use the editor when you want to preserve comments.
 
-Written on first run if missing. **Hot-reload** every 1100 ms compares the file
-as a string (not mtime). A save restyles colors, sizes, opacity. It does **not**
-rebuild surfaces. Changing `behavior.monitors`, `calendar.feeds`, or dock-hiding feature flags
-requires a restart (`systemctl --user restart naarchy`).
+Naarchy writes defaults on first run. Valid appearance changes apply while it is
+running, including resizing the surfaces. Invalid edits leave the last working
+configuration active. Restart after changing service feature flags or calendar
+feeds: `systemctl --user restart naarchy.service`.
 
-Existing files are never overwritten, but if `[calendar]` is missing (pre-0.2 installs like yours) naarchy appends it on next run. You can also add it manually at the bottom.
+Existing configuration files are never rewritten during startup. Add a calendar
+section manually or use Preferences to connect a feed.
 
 ## Schema (defaults)
 
@@ -16,18 +21,17 @@ Existing files are never overwritten, but if `[calendar]` is missing (pre-0.2 in
 theme = "auto"            # auto | dark | light
 omarchy = true            # follow the active omarchy colors.toml
 # accent = "#89b4fa"      # override
-# pill_bg = "#000000"
-# bg = "rgba(0,0,0,0.62)"
+# bg = "#1e1e20"
 # fg = "#cdd6f4"
 # icon_font = "JetBrainsMono Nerd Font"
-radius = 24
 notch_mode = false
 # pill_width_notch = 190
-# pill_width_island = 392
+# pill_width_island = 370
 # margin_top = 0
-panel_width = 760
-panel_height = 540
+panel_width = 680
+panel_height = 460
 opacity = 0.98
+reduce_motion = false    # skip spring animations
 
 [behavior]
 hover_open = true
@@ -39,15 +43,15 @@ monitors = "all"          # "all" | "primary" | ["DP-1", "HDMI-A-1"]
                           # primary = GDK monitor index 0
 
 [features]
-media = true              # pill live-activity chip (Home widget still exists)
-shelf = true              # Inbox dock item
-clipboard = true          # Clipboard dock item
-calendar = true           # Calendar dock item
-timer = true              # pill live-activity chip (Home widget still exists)
+media = true              # media discovery, controls, and live activity
+shelf = true              # Inbox page and file drops
+clipboard = true          # clipboard capture and history page
+calendar = true           # Calendar page and feed refresh
+timer = true              # timer controls and live activity
 notifications = false     # own org.freedesktop.Notifications (leave false for mako)
 
 [clipboard]
-max_entries = 200
+max_entries = 80
 max_image_bytes = 8388608
 
 [hud]
@@ -65,16 +69,56 @@ feeds = []                # public iCloud / Google ICS feed URLs (one per line)
 #   iCloud: Calendar → Share Calendar → Public Calendar → Copy Link (webcal:// → https://)
 #   After editing feeds: systemctl --user restart naarchy
 refresh_min = 5           # minutes between fetches
+travel_times = false      # opt in to IP location, address geocoding, and route services
 ```
 
-## Feature flags vs widgets
+Colors use six-digit hexadecimal values such as `#89b4fa`; `rgba()` values are
+not supported. The legacy `appearance.pill_bg` and `appearance.radius` keys are
+still accepted for compatibility, but the current capsule renderer does not use
+them. Its shape follows the island geometry and active theme.
 
-`features.shelf` / `clipboard` / `calendar` hide dock items.
+## Features and Home widgets
 
-`features.media` / `features.timer` hide the **pill live-activity chips**.
-They do not remove the Home widgets. Home content is `widgets.json`.
+The feature flags control the relevant service or page. Restart after changing
+these switches. Disabling Clipboard also stops capture; hiding its page is not a
+substitute for clearing history already stored on disk.
 
-Home and Widgets dock items are always present.
+Use Widgets to add or remove Timer, Media, and Clock from Home. A deliberately
+empty Home stays empty after a restart. These layout choices live in
+`widgets.json`; the feature flags remain in `config.toml`.
+
+## Clipboard retention
+
+`max_entries` caps unpinned entries, and at most 24 unpinned images are kept.
+Pinned items remain until you remove or unpin them. `max_entries = 0` stops new
+history entries. `max_image_bytes` rejects images larger than its limit.
+Clipboard reads are capped at 8 MiB; this setting can impose a smaller image
+limit but cannot increase the read cap.
+Removing history deletes owned image data after the updated index is saved;
+shared references are retained until the final item is removed.
+
+History and images are local, owner-readable files, not encrypted storage.
+Clearing unpinned history preserves your pins. To remove all history, unpin those
+items and clear again, or remove each pinned entry.
+
+## Calendar privacy
+
+Feed URLs may contain private access tokens. Keep this file private and avoid
+including the URLs in logs or screenshots. With `travel_times = false`, Naarchy
+does not request automatic geolocation or send calendar addresses to routing
+services. Enabling it uses IPinfo (or ipapi.co) for an approximate starting location, Nominatim
+for event addresses, and OSRM for estimated driving time. Estimates are approximate.
+
+## Notification banners
+
+Naarchy shows at most three banners at once and queues up to 32 more. Persistent
+banners stay visible until dismissed, and a banner's expiration timer starts
+when it becomes visible. If the pending queue fills, overflow is reported to the
+sender as a closed notification with an undefined reason. Retention is bounded;
+Naarchy is not a notification archive.
+
+Leave `features.notifications = false` to keep your existing desktop notification
+service. `naarchy notify` can still show a local banner with that setting off.
 
 ## Files naarchy owns
 
@@ -86,15 +130,20 @@ Home and Widgets dock items are always present.
 ~/.local/share/naarchy/blobs/
 ~/.cache/naarchy/art/
 ~/.cache/naarchy/calendar/
-~/.cache/naarchy/chime.wav
+~/.cache/naarchy/alarm-v2.wav
+~/.cache/naarchy/geocode.json
+~/.cache/naarchy/route.json
 $XDG_RUNTIME_DIR/naarchy.sock
 ```
 
-`widgets.json` lives in the config dir on purpose (layout preference, not content).
-Do not move it.
+`widgets.json` stores layout preferences, while shelf and clipboard files store
+content. The XDG config, data, and cache environment variables override these
+locations. Malformed state files are backed up beside the original as
+`*.json.recovery-*` before starting an empty store; keep those backups if you
+need to recover content.
 
-A leftover `accent = "#7aa2f7"` with `omarchy = true` is stripped so the theme
-accent wins.
+The image cache uses `blobs/`; shelf entries referencing your original files do
+not own those files. Removing a shelf entry never removes the original.
 
-Clipboard polling (600 ms) is **always on** in v0.1, even if the Clipboard dock
-item is hidden.
+A legacy `accent = "#7aa2f7"` with `omarchy = true` is treated as unset so the
+current Omarchy accent can take effect.

@@ -30,11 +30,11 @@ fn ensure_wav() -> PathBuf {
     let mut samples: Vec<i16> = Vec::new();
     for _ in 0..3 {
         push_tone(&mut samples, sr, 1480.0, 0.12, 0.95);
-        samples.extend(std::iter::repeat(0i16).take((sr as f64 * 0.05) as usize));
+        samples.extend(std::iter::repeat_n(0i16, (sr as f64 * 0.05) as usize));
         push_tone(&mut samples, sr, 1480.0, 0.12, 0.95);
-        samples.extend(std::iter::repeat(0i16).take((sr as f64 * 0.22) as usize));
+        samples.extend(std::iter::repeat_n(0i16, (sr as f64 * 0.22) as usize));
     }
-    while samples.len() % 4 != 0 {
+    while !samples.len().is_multiple_of(4) {
         samples.push(0);
     }
     let data_len = samples.len() * 2;
@@ -66,7 +66,7 @@ fn push_tone(samples: &mut Vec<i16>, sr: u32, freq: f64, dur: f64, amp: f64) {
     for i in 0..n {
         let t = i as f64 / sr as f64;
         let attack = (t / 0.006).min(1.0);
-        let release = ((dur - t) / 0.018).min(1.0).max(0.0);
+        let release = ((dur - t) / 0.018).clamp(0.0, 1.0);
         let env = attack * release;
         let s = ((t * freq * std::f64::consts::TAU).sin()
             + 0.35 * (t * freq * 3.0 * std::f64::consts::TAU).sin()

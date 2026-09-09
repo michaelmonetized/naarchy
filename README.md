@@ -1,111 +1,107 @@
 # Naarchy
 
-Your MacBook notch, on Linux. A shelf. A clipboard. A timer that takes over the
-screen when it hits zero.
+A little space for everything you are doing.
 
-Native GTK4 on Omarchy / Hyprland. MIT. Not Electron. Not a blurry fog hanging
-off the camera. A black glass island that fills the hole and grows ears when
-something is live.
+Naarchy brings a file shelf, clipboard history, music controls, a focus timer,
+and your calendar to the top of your Linux desktop. Drop something in, get back
+to work, and pick it up when you need it.
 
-https://github.com/user-attachments/assets/959a779c-8d26-4f23-855d-08b9b4a300fe
+Built with Rust and GTK4 for Omarchy and Hyprland. Free software, licensed under MIT.
 
-<p align="center">
-  <img src="docs/screenshots/v0.3/strip-timer-live.jpg" alt="Timer live activity wrapping the camera" />
-</p>
+![Naarchy Home with timer presets, music launchers, and labeled navigation](docs/screenshots/v0.4/home.png)
 
-![Home — ruler timer, media](docs/screenshots/v0.3/panel-home.jpg)
+*The 0.4 interface, captured on Hyprland with demonstration content.*
 
-![Inbox — drop a file, get a thumbnail grid](docs/screenshots/v0.3/panel-inbox.jpg)
+## Your everyday essentials
 
-<p align="center">
-  <img src="docs/screenshots/v0.3/strip-files.jpg" alt="Collapsed Inbox pile and file count" />
-</p>
+- **Inbox.** Park files, images, and text. Open or reveal files, copy paths, pin
+  the things you keep reaching for, and drag files back into another application.
+- **Clipboard.** Search text and image history, copy an item again, pin favorites,
+  and clear everything you have not pinned. History survives a restart.
+- **Focus.** Set a countdown from Home or the command line. Pause and resume it;
+  a visual bell and repeating sound announce the finish.
+- **Music.** See your current MPRIS player, album art, and transport controls.
+  When nothing is playing, launch Spotify or cliamp from Home.
+- **Calendar.** Browse the month and add ICS feeds for your agenda. Open meeting
+  links and directions. Travel estimates are optional.
+- **Make it yours.** Choose your Home widgets, follow your Omarchy colors, and
+  adjust the island's size and position. Use volume and brightness HUDs from
+  your existing desktop bindings.
 
-<p align="center">
-  <img src="docs/screenshots/v0.3/panel-clipboard.jpg" alt="Clipboard history" width="48%" />
-  <img src="docs/screenshots/v0.3/panel-calendar.jpg" alt="Calendar" width="48%" />
-</p>
+A physical display notch is optional. Hover and fullscreen detection use Hyprland;
+clicking the island and the CLI work on compatible Wayland compositors with layer shell.
 
-## What it does
+| A place to put things | Find that thing you copied |
+|---|---|
+| ![Inbox with parked files and an image](docs/screenshots/v0.4/inbox.png) | ![Searchable clipboard history](docs/screenshots/v0.4/clipboard.png) |
 
-Hover the top of the display. The island opens. Click it, or `Super+N`.
+## Get started
 
-- **Idle** fills the 16" M1 Pro camera hole: 370×67.
-- **Live** hangs 72px with ears. Timer countdown and a stacked file pile sit on
-  the glass, not in the webcam.
-- **Home** is a ruler timer (release to start, click to pause) and MPRIS media.
-- **Inbox** is a file shelf. Drag onto any tab. A dotted overlay fades in.
-  Release jumps you to Inbox with thumbs. Drag them back out into any app.
-- **Clipboard** is history you can search and pin. `Super+V`.
-- **Calendar** is the month plus today's agenda. ICS feeds if you want them.
-- **Timer done** is a fullscreen visual bell and a looping alarm until you click
-  it, hit a key, or dismiss.
-
-The expanded glass only eats clicks on the capsule and the dock. Everything else
-at the top of the screen stays yours. That is `set_input_region`, not a slogan.
-
-## Install
+On Arch Linux or Omarchy, install the build dependencies and build the source:
 
 ```bash
-sudo pacman -S --needed gtk4 gtk4-layer-shell rust
-git clone https://github.com/michaelmonetized/naarchy
+sudo pacman -S --needed base-devel gtk4 gtk4-layer-shell rust
+git clone https://github.com/michaelmonetized/naarchy.git
 cd naarchy
 cargo install --path . --locked
+~/.cargo/bin/naarchy run
 ```
 
-Then:
+Rust **1.92 or newer** is required. Run inside your Wayland desktop session.
+
+Click the island to open it, drop a file into Inbox, and try a short timer:
+
+```bash
+naarchy timer 10s
+naarchy tab clipboard
+naarchy doctor
+```
+
+To install the supplied keyboard shortcuts, review `naarchy install-binds` and
+copy the bindings you want into your Hyprland configuration. The suggested
+shortcuts are `Super+N` for the panel, `Super+Shift+N` for Inbox, and `Super+V`
+for Clipboard; they take effect after you add the bindings.
+
+For reliable autostart after a source installation:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/naarchy.service ~/.config/systemd/user/
-# cargo-install: ExecStart=%h/.cargo/bin/naarchy run
+sed 's|ExecStart=/usr/bin/naarchy run|ExecStart=%h/.cargo/bin/naarchy run|' \
+  contrib/naarchy.service > ~/.config/systemd/user/naarchy.service
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP
 systemctl --user daemon-reload
 systemctl --user enable --now naarchy.service
 ```
 
-Or, once, from a terminal: `naarchy run`.
+[Installation and troubleshooting](docs/INSTALL.md) covers optional dependencies,
+other installation methods, compositor setup, updates, and removal.
 
-Full deps, PKGBUILD, Asahi notch keys, troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
+## Preferences and privacy
 
-## First 60 seconds
+The settings button opens native Preferences for appearance, motion, behavior,
+and feature controls. Advanced settings are available in
+`~/.config/naarchy/config.toml`. Appearance changes reload while Naarchy is
+running. Restart after changing service feature flags or calendar feeds. Home
+widget choices are saved separately.
 
-1. Hover the top-center. The island opens.
-2. `Super+N` toggles. `Super+V` is clipboard. `Super+Shift+N` is Inbox.
-3. Drop a file on the capsule. Drag it back out.
-4. Scrub the timer ruler. Let go. It starts. Click to pause. When it hits zero
-   the screen takes over and the alarm loops until you dismiss it.
-5. Paste this into Hyprland (or run `naarchy install-binds`):
+Clipboard and shelf content stay on your machine. Their state and image files
+are saved with owner-only permissions. Clipboard history is **not encrypted**;
+anything you copy can enter history while capture is enabled. Disable the
+Clipboard feature to stop capture, and clear unpinned history from its page.
+Parked files are references to the originals; clearing Inbox does not delete them.
 
-```
-exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP
-layerrule = blur, naarchy
-layerrule = ignorealpha 0.2, naarchy
-```
+Naarchy has no telemetry. Network access is used for your configured calendar
+feeds, artwork URLs supplied by media players, and optional travel estimates.
+When enabled, travel estimates send event addresses to OpenStreetMap's Nominatim,
+request approximate location from IPinfo (with ipapi.co as a fallback), and send route coordinates to OSRM.
+Directions and meeting buttons open the relevant site only when selected.
+Private calendar feed URLs are credentials: keep your configuration private.
 
-Pick **one** autostart: systemd **or** the desktop file. Not both. Not
-`exec-once = naarchy`.
+## Learn more
 
-## Config
+[Configuration](docs/CONFIG.md) · [CLI reference](docs/CLI.md) ·
+[Theming](docs/THEMING.md) · [Product scope](docs/COMPARISON.md) ·
+[Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
-`~/.config/naarchy/config.toml` hot-reloads colors and sizes. Monitor list and
-feature flags need a restart.
-
-On a 16" M1 Pro at 3456×2234 scale 1, idle is 370×67 because that is the hole.
-Live hangs 72px. Override `pill_width_island` if your glass is different.
-
-Reference: [docs/CONFIG.md](docs/CONFIG.md) · CLI: [docs/CLI.md](docs/CLI.md) ·
-Theming: [docs/THEMING.md](docs/THEMING.md).
-
-Naarchy follows the active Omarchy theme unless you override it.
-
-## Privacy
-
-No telemetry. Network is album art URLs your player already published, plus ICS
-feeds you listed. Socket is `$XDG_RUNTIME_DIR/naarchy.sock`, mode 600.
-
-## License
-
-MIT. Copyright 2026 Michael C. Hurley.
-
-Honest matrix vs Droppy / NotchNook / Boring.Notch: [docs/COMPARISON.md](docs/COMPARISON.md).
-Spec: [docs/SPEC.md](docs/SPEC.md).
+Linux is the supported platform. Naarchy does not currently provide every feature
+of macOS notch applications; the product scope lists the boundaries explicitly.

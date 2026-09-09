@@ -27,7 +27,7 @@ fn hex_or_base(
 ) -> String {
     if let Some(v) = cfg_opt {
         let v = v.trim();
-        if v.starts_with('#') && v.len() >= 7 {
+        if v.starts_with('#') && hex_triple(v).is_some() {
             return v.to_string();
         }
     }
@@ -55,6 +55,9 @@ pub fn resolve(cfg: &Config, dark: bool) -> Palette {
         "light" => false,
         _ => om.as_ref().map(|p| p.mode != "light").unwrap_or(dark),
     };
+    // An explicit light/dark choice must work even when the desktop currently
+    // uses the opposite mode. Keep its accent, but use matching surface colors.
+    let surface_palette = om.as_ref().filter(|p| (p.mode != "light") == theme_dark);
 
     let accent = a
         .accent
@@ -63,18 +66,17 @@ pub fn resolve(cfg: &Config, dark: bool) -> Palette {
         .unwrap_or_else(|| DEFAULT_ACCENT.into());
     let bg = hex_or_base(
         &a.bg,
-        om.as_ref().map(|p| p.background.clone()),
+        surface_palette.map(|p| p.background.clone()),
         "#0a0a0f",
         "#f4f4f8",
         theme_dark,
     );
-    let bg2 = om
-        .as_ref()
+    let bg2 = surface_palette
         .map(|p| p.dark_background.clone())
         .unwrap_or_else(|| if theme_dark { "#131318" } else { "#ffffff" }.into());
     let fg = hex_or_base(
         &a.fg,
-        om.as_ref().map(|p| p.foreground.clone()),
+        surface_palette.map(|p| p.foreground.clone()),
         "#eef0f6",
         "#17171c",
         theme_dark,
@@ -113,8 +115,8 @@ pub fn accent_hex(cfg: &Config) -> String {
 }
 
 pub fn hex_triple(s: &str) -> Option<(u8, u8, u8)> {
-    let h = s.trim_start_matches('#');
-    if h.len() < 6 {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 || !h.is_ascii() {
         return None;
     }
     Some((
@@ -156,33 +158,35 @@ pub fn build_css(cfg: &Config, dark: bool) -> String {
 
     format!(
         r#"
-/* Scoped to our windows so we don't bleach every GTK app on the display. */
+/* This provider belongs to this process. Keep the reset less specific than
+ * component classes so surfaces and focus indicators survive the reset. */
 window.naarchy {{
   background-color: transparent;
   background-image: none;
   color: {fg};
+  font-family: "Inter", "Adwaita Sans", sans-serif;
+  font-size: 13px;
 }}
-window.naarchy box,
-window.naarchy label,
-window.naarchy button,
-window.naarchy entry,
-window.naarchy scrollbar,
-window.naarchy revealer,
-window.naarchy stack,
-window.naarchy scrolledwindow,
-window.naarchy viewport,
-window.naarchy flowbox,
-window.naarchy flowboxchild,
-window.naarchy listbox,
-window.naarchy listboxrow,
-window.naarchy scale,
-window.naarchy image,
-window.naarchy picture {{
+box,
+label,
+button,
+entry,
+scrollbar,
+revealer,
+stack,
+scrolledwindow,
+viewport,
+flowbox,
+flowboxchild,
+listbox,
+listboxrow,
+scale,
+image,
+picture {{
   background-color: transparent;
   background-image: none;
   border: none;
   box-shadow: none;
-  outline: none;
 }}
 
 .na-pill {{
@@ -229,7 +233,7 @@ window.naarchy picture {{
 .na-dock {{
   padding: 6px 8px;
   border-radius: 999px;
-  background-color: rgba(12, 12, 16, 0.62);
+  background-color: {bg2};
   border: 1px solid rgba(255,255,255,0.10);
   box-shadow: 0 10px 28px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.08);
 }}
@@ -245,13 +249,13 @@ window.naarchy picture {{
   background-color: {glass_2};
 }}
 .na-dock-btn:checked {{
-  background-color: rgba(255,255,255,0.16);
+  background-color: rgba({accent_rgb},0.20);
 }}
-.na-dock-btn:checked .na-dock-glyph {{ color: #ffffff; }}
+.na-dock-btn:checked .na-dock-glyph {{ color: {accent}; }}
 .na-dock-glyph {{
   font-family: "{icon_font}";
   font-size: 16px;
-  color: rgba(255,255,255,0.85);
+  color: {fg_dim};
   transition: color 180ms {ease};
 }}
 
@@ -281,7 +285,7 @@ window.naarchy box.na-drop-veil {{
 
 .na-widget {{
   border-radius: 22px;
-  padding: 16px 16px 14px 16px;
+  padding: 18px;
   background-color: {glass};
   border: 1px solid {border};
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
@@ -330,6 +334,30 @@ window.naarchy box.na-drop-veil {{
 .na-tab.active {{ background-color: {accent}; color: #0d0e12; }}
 
 .na-panel-pad {{ padding: 8px 6px 4px 6px; }}
+.na-page-head {{ margin-bottom: 8px; }}
+window.naarchy.na-preferences {{ background-color: {bg2}; }}
+.na-preference-title {{ color: {fg}; font-size: 13px; font-weight: 600; }}
+.na-preferences switch {{ background-color: {glass_3}; border-radius: 999px; }}
+.na-preferences switch:checked {{ background-color: {accent}; }}
+.na-preferences switch slider {{ background-color: {fg}; border-radius: 999px; }}
+.na-preferences dropdown button, .na-preferences spinbutton {{ background-color: {glass}; color: {fg}; border-radius: 10px; border: 1px solid {border}; padding: 4px 8px; }}
+textview.na-entry text {{ color: {fg}; background-color: transparent; }}
+.na-page-title {{ font-size: 22px; font-weight: 800; letter-spacing: -0.6px; color: {fg}; }}
+.na-page-subtitle {{ font-size: 12px; color: {fg_dim}; }}
+.na-widget-heading {{ font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: {fg_dim}; }}
+.na-empty-state {{ padding: 24px 16px; border-radius: 22px; background-color: {glass}; border: 1px dashed {border}; }}
+.na-empty-icon {{ font-family: "{icon_font}"; font-size: 30px; color: {accent}; margin-bottom: 6px; }}
+.na-empty-title {{ font-size: 17px; font-weight: 700; color: {fg}; }}
+.na-empty-detail {{ font-size: 12px; color: {fg_dim}; }}
+.na-feedback {{ font-size: 11px; color: {accent}; }}
+.na-dock-label {{ font-size: 11px; font-weight: 600; color: {fg_dim}; }}
+.na-widget-description {{ font-size: 11px; color: {fg_dim}; }}
+button:disabled {{ opacity: 0.42; }}
+button:focus-visible, entry:focus-within, row:focus-visible, flowboxchild:focus-visible, drawingarea:focus-visible {{
+  outline: 2px solid {accent};
+  outline-offset: 3px;
+}}
+.na-clip-row:focus-visible {{ background-color: {glass_2}; }}
 
 .na-title {{
   font-size: 13px;
@@ -356,8 +384,6 @@ window.naarchy box.na-drop-veil {{
   box-shadow: none;
   min-width: 32px;
   min-height: 32px;
-  max-width: 32px;
-  max-height: 32px;
 }}
 .na-media-card {{
   border-radius: 12px;
@@ -375,7 +401,7 @@ window.naarchy box.na-drop-veil {{
   font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.2px;
-  color: #ffffff;
+  color: {fg};
 }}
 .na-media-artist {{ font-size: 13px; color: {fg_dim}; }}
 .na-media-player {{
@@ -398,6 +424,7 @@ window.naarchy box.na-drop-veil {{
   color: #1a1a1c;
 }}
 .na-btn {{
+  color: {fg};
   border-radius: 999px;
   min-width: 36px;
   min-height: 36px;
@@ -550,9 +577,9 @@ window.naarchy box.na-drop-veil {{
 
 .na-preset {{
   border-radius: 999px;
-  min-width: 48px;
+  min-width: 0;
   min-height: 28px;
-  padding: 0 12px;
+  padding: 0 8px;
   font-size: 12px;
   font-weight: 600;
   background-color: {glass};

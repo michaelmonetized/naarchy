@@ -7,9 +7,45 @@ pub mod notifd;
 pub mod settings;
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::OnceLock;
+
+/// Each new banner revision gets a token, including local CLI/timer notices.
+pub fn next_banner_generation() -> u64 {
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    GENERATION
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1)
+}
+
+/// Limit untrusted downloads without ever persisting truncated content.
+pub(crate) fn read_limited(reader: impl std::io::Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "content exceeds size limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn encode_uri_component(text: &str) -> String {
+    use std::fmt::Write;
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
 
 /// GTK main context, installed once the UI thread is up. Workers wake it
 /// instead of the UI spinning a 60 Hz poll.
@@ -63,9 +99,11 @@ impl EventTx {
 /// Events flowing from async services (tokio side) into the GTK main loop.
 #[derive(Debug, Clone)]
 pub enum Event {
+    MediaReady(tokio::sync::mpsc::UnboundedSender<mpris::MediaCmd>),
+    NotificationsReady(tokio::sync::mpsc::UnboundedSender<notifd::NotifCmd>),
     Media(Option<MediaState>),
     SchemeDark(bool),
-    HoverOpen,
+    HoverOpen(String),
     HoverEnd,
     /// A regular window was activated (another app took focus) — panels
     /// should consider collapsing back to the notch.
@@ -74,9 +112,14 @@ pub enum Event {
     MonitorAdded(String),
     ClipNew(RawClip),
     Notify(Banner),
+    CloseBanner {
+        id: u32,
+        generation: u64,
+    },
     ConfigChanged(Box<crate::config::Config>),
     /// ICS feeds were refreshed; today's meetings lived in shared.cal_events.
     CalendarReload,
+    CalendarLoaded(Vec<calendar::CalEvent>),
     /// Enriched with travel times (directions + leave label)
     CalendarEnriched(Vec<crate::services::calendar::CalEvent>),
 }
@@ -88,7 +131,7 @@ pub struct RawClip {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct MediaState {
     pub bus: String,
@@ -151,12 +194,16 @@ pub enum ClipKind {
 #[allow(dead_code)]
 pub struct Banner {
     pub id: u32,
+    /// Distinguishes replacements so delayed close commands cannot close new content.
+    pub generation: u64,
     pub app_name: String,
     pub icon: String,
     pub summary: String,
     pub body: String,
     pub actions: Vec<(String, String)>,
     pub urgency: u8, // 0 low 1 normal 2 critical
+    /// None stays visible until dismissed; Some schedules expiration.
+    pub timeout_ms: Option<u64>,
 }
 
 /// Verbs sent from CLI/IPC into the running instance.
@@ -189,6 +236,19 @@ pub enum Verb {
 #[cfg(test)]
 mod tests {
     use super::MediaState;
+
+    #[test]
+    fn bounded_reads_reject_oversized_payloads() {
+        assert_eq!(super::read_limited(&b"1234"[..], 4).unwrap(), b"1234");
+        assert_eq!(
+            super::read_limited(&b"12345"[..], 4).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            super::encode_uri_component("Café & room 2"),
+            "Caf%C3%A9%20%26%20room%202"
+        );
+    }
 
     #[test]
     fn hollow_chromium_is_not_live() {

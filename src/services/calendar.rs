@@ -1,9 +1,12 @@
 //! Calendar: fetch iCloud/Google ICS feeds, cache them, and parse today's
 //! meetings (filtering out noise like birthdays/anniversaries/holidays).
 
+use super::encode_uri_component;
 use crate::timefmt;
+use gtk4::glib::{DateTime, TimeZone};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::services::{Event, EventTx};
 
@@ -28,40 +31,59 @@ pub struct CalEvent {
 }
 
 fn cache_dir() -> PathBuf {
-    let mut p = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    p.push("naarchy");
-    p.push("calendar");
-    p
+    crate::util::cache_dir().join("calendar")
 }
 
-/// Download each feed into the cache dir (sanity-checked as ICS).
+const FEED_LIMIT: usize = 8 * 1024 * 1024;
+
+fn feed_path(url: &str) -> PathBuf {
+    cache_dir().join(format!("{}.ics", crate::util::cache_key(url.as_bytes())))
+}
+
+/// Download with bounded parallelism; publish complete feeds with atomic rename.
 pub async fn refresh_feeds(feeds: &[String]) {
-    for (i, url) in feeds.iter().enumerate() {
-        let url = url.clone();
-        let url_src = url.clone();
-        let path = cache_dir().join(format!("feed-{i}.ics"));
-        let fetched = tokio::task::spawn_blocking(move || fetch(&url_src)).await;
-        match fetched {
-            Ok(Some(body)) if body.starts_with("BEGIN:VCALENDAR") => {
-                if let Some(dir) = path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
+    for group in feeds.chunks(4) {
+        let mut tasks = tokio::task::JoinSet::new();
+        for url in group {
+            let url = url.clone();
+            tasks.spawn_blocking(move || {
+                let path = feed_path(&url);
+                let Some(body) = fetch(&url) else {
+                    // Calendar URLs often contain private feed tokens. Never log them.
+                    log::warn!("calendar: feed refresh failed; keeping last cached copy");
+                    return;
+                };
+                if std::fs::create_dir_all(cache_dir()).is_err() {
+                    return;
                 }
-                if std::fs::write(&path, &body).is_err() {
-                    log::warn!("calendar: failed writing cache {}", path.display());
+                let pending = path.with_extension("pending");
+                if std::fs::write(&pending, body).is_ok() {
+                    let _ = std::fs::rename(&pending, &path);
                 }
-            }
-            Ok(_) => log::warn!("calendar: feed {url} returned non-ICS content"),
-            Err(e) => log::warn!("calendar: feed {url} failed ({e})"),
+                let _ = std::fs::remove_file(pending);
+            });
         }
+        while tasks.join_next().await.is_some() {}
     }
 }
 
 fn fetch(url: &str) -> Option<String> {
-    let resp = ureq::get(url)
-        .timeout(Duration::from_secs(20))
+    let url = url
+        .strip_prefix("webcal://")
+        .map(|u| format!("https://{u}"))
+        .unwrap_or_else(|| url.to_string());
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return None;
+    }
+    let resp = ureq::get(&url)
+        .timeout(Duration::from_secs(15))
         .call()
         .ok()?;
-    resp.into_string().ok()
+    let bytes = super::read_limited(resp.into_reader(), FEED_LIMIT).ok()?;
+    let text = String::from_utf8(bytes).ok()?;
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    (text.starts_with("BEGIN:VCALENDAR") && text.trim_end().ends_with("END:VCALENDAR"))
+        .then(|| text.to_string())
 }
 
 /// Background service: refresh feeds every `refresh_min`, then emit
@@ -70,10 +92,25 @@ pub async fn run(tx: EventTx, feeds: Vec<String>, refresh_min: u64) {
     if feeds.is_empty() {
         return;
     }
+    // Remove caches for calendars no longer configured, including old index-based names.
+    // Otherwise deleting/reordering a feed could keep showing its private events forever.
+    let keep: std::collections::HashSet<_> = feeds.iter().map(|url| feed_path(url)).collect();
+    if let Ok(entries) = std::fs::read_dir(cache_dir()) {
+        for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+            if path.extension().is_some_and(|ext| ext == "ics") && !keep.contains(&path) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    tx.send(Event::CalendarReload);
     loop {
         refresh_feeds(&feeds).await;
         tx.send(Event::CalendarReload);
-        tokio::time::sleep(Duration::from_secs(refresh_min.clamp(1, 1440) * 60)).await;
+        for _ in 0..refresh_min.clamp(1, 1440) {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            // Re-evaluate local dates and expired meetings without another download.
+            tx.send(Event::CalendarReload);
+        }
     }
 }
 
@@ -81,13 +118,22 @@ pub async fn run(tx: EventTx, feeds: Vec<String>, refresh_min: u64) {
 pub fn today_from_cache() -> Vec<CalEvent> {
     let mut out = Vec::new();
     let mut entries: Vec<_> = match std::fs::read_dir(cache_dir()) {
-        Ok(d) => d.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+        Ok(d) => d
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "ics"))
+            .collect(),
         Err(_) => return out,
     };
     entries.sort();
     for p in entries {
-        if let Ok(text) = std::fs::read_to_string(&p) {
-            out.extend(parse_ics(&text));
+        if let Ok(file) = std::fs::File::open(&p) {
+            if let Some(text) = super::read_limited(file, FEED_LIMIT)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+            {
+                out.extend(parse_ics(&text));
+            }
         }
     }
     out.sort_by_key(|e| e.start_epoch);
@@ -95,13 +141,19 @@ pub fn today_from_cache() -> Vec<CalEvent> {
 }
 
 /// Enrich physical-location events with "Leave HH:MM (N min)" via current location.
-/// Blocking — call from a background thread. Uses IP geolocation fallback if portal denied.
+/// Blocking — call from a background thread after travel estimates are enabled.
 pub fn enrich_with_travel(mut events: Vec<CalEvent>) -> Vec<CalEvent> {
+    if !events
+        .iter()
+        .any(|ev| ev.directions_url.is_some() && !ev.all_day)
+    {
+        return events;
+    }
     let Some(cur) = crate::services::location::current_coords() else {
         return events;
     };
     for ev in events.iter_mut() {
-        if ev.directions_url.is_none() || ev.location.is_empty() {
+        if ev.all_day || ev.directions_url.is_none() || ev.location.is_empty() {
             continue;
         }
         // avoid hammering Nominatim/OSRM for far-future events (only today, already filtered)
@@ -120,145 +172,273 @@ pub fn enrich_with_travel(mut events: Vec<CalEvent>) -> Vec<CalEvent> {
 /// birthdays / anniversaries — Google emits those with the BIRTHDAY category,
 /// iCloud titles them "...'s Birthday").
 pub fn parse_ics(text: &str) -> Vec<CalEvent> {
-    let (ty, tm, td) = timefmt::today_parts();
-    let now = timefmt::now_epoch() as i64;
+    parse_ics_at(text, timefmt::now_epoch() as i64)
+}
 
-    let mut events = Vec::new();
-    for block in block_split(text, "BEGIN:VEVENT", "END:VEVENT") {
-        let props = ics_props(&block);
-        let summary = props
-            .get("SUMMARY")
+type Properties = HashMap<String, String>;
+
+struct CalendarRecord {
+    props: Properties,
+    recurrence: String,
+    uid: String,
+    recurrence_id: Option<i64>,
+}
+
+fn cancelled(props: &Properties) -> bool {
+    props
+        .get("STATUS")
+        .is_some_and(|v| v.eq_ignore_ascii_case("CANCELLED"))
+}
+
+fn revision(props: &Properties) -> (u64, &str) {
+    (
+        props
+            .get("SEQUENCE")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        props
+            .get("LAST-MODIFIED")
+            .or_else(|| props.get("DTSTAMP"))
             .map(String::as_str)
-            .unwrap_or("(untitled)");
-        let cat = props.get("CATEGORIES").cloned().unwrap_or_default();
-        let cat_up = cat.to_uppercase();
-        if cat_up.contains("BIRTHDAY") || cat_up.contains("ANNIVERSARY") {
+            .unwrap_or_default(),
+    )
+}
+
+fn parse_ics_at(text: &str, now: i64) -> Vec<CalEvent> {
+    let Ok(today) = DateTime::from_unix_local(now) else {
+        return vec![];
+    };
+    let Ok(midnight) =
+        DateTime::from_local(today.year(), today.month(), today.day_of_month(), 0, 0, 0.0)
+    else {
+        return vec![];
+    };
+    let Ok(tomorrow) = midnight.add_days(1) else {
+        return vec![];
+    };
+    let (begin, end) = (midnight.to_unix(), tomorrow.to_unix());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut records: BTreeMap<(String, Option<i64>), CalendarRecord> = BTreeMap::new();
+    for (index, block) in block_split(text, "BEGIN:VEVENT", "END:VEVENT")
+        .into_iter()
+        .take(10_000)
+        .enumerate()
+    {
+        let props = ics_props(&block);
+        let uid = props
+            .get("UID")
+            .cloned()
+            .unwrap_or_else(|| format!("anonymous-{index}"));
+        let recurrence_id = event_datetime(&props, "RECURRENCE-ID").map(|(date, _)| date.to_unix());
+        let recurrence = unfold_ics(&block)
+            .lines()
+            .filter(|line| {
+                matches!(
+                    line.split([';', ':'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_uppercase()
+                        .as_str(),
+                    "DTSTART" | "RRULE" | "RDATE" | "EXDATE"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let key = (uid.clone(), recurrence_id);
+        if records
+            .get(&key)
+            .is_some_and(|old| revision(&old.props) > revision(&props))
+        {
             continue;
         }
-        let low = summary.to_lowercase();
-        if low.contains("birthday") || low.contains("anniversary") || low.contains("holiday") {
+        records.insert(
+            key,
+            CalendarRecord {
+                props,
+                recurrence,
+                uid,
+                recurrence_id,
+            },
+        );
+    }
+    let replaced: HashSet<_> = records
+        .values()
+        .filter_map(|r| r.recurrence_id.map(|id| (r.uid.as_str(), id)))
+        .collect();
+    let cancelled_series: HashSet<_> = records
+        .values()
+        .filter(|r| r.recurrence_id.is_none() && cancelled(&r.props))
+        .map(|r| r.uid.as_str())
+        .collect();
+    let mut events = Vec::new();
+    for record in records.values() {
+        if Instant::now() >= deadline {
+            log::warn!("calendar: recurrence expansion reached processing limit");
+            break;
+        }
+        if cancelled(&record.props) || cancelled_series.contains(record.uid.as_str()) {
             continue;
         }
-        let dtstart = match props.get("DTSTART") {
-            Some(d) => d,
-            None => continue,
+        // Detached instances inherit unchanged details from their recurring master.
+        let mut props = if record.recurrence_id.is_some() {
+            records
+                .get(&(record.uid.clone(), None))
+                .map(|r| r.props.clone())
+                .unwrap_or_default()
+        } else {
+            Properties::new()
         };
-        let Some((cy, cm, cd, hhmm, is_utc, all_day)) = parse_dtstart(dtstart) else {
+        props.extend(record.props.clone());
+        let Some((start, all_day)) = event_start(&props) else {
             continue;
         };
-        if all_day {
-            if (cy, cm, cd) != (ty, tm, td) {
+        let recurring = record.recurrence_id.is_none()
+            && (props.contains_key("RRULE") || props.contains_key("RDATE"));
+        let starts = if recurring {
+            recurrence_dates(&record.recurrence, begin, end, deadline)
+        } else {
+            vec![start.to_unix()]
+        };
+        for start in starts {
+            if record.recurrence_id.is_none() && replaced.contains(&(record.uid.as_str(), start)) {
                 continue;
             }
-            let start = timefmt::days_from_civil(cy, cm, cd) * 86400 - timefmt::local_offset_secs();
-            let loc_raw = props
-                .get("LOCATION")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default();
-            let (join_url, join_kind) = extract_join_url(&props);
-            let directions_url = if is_physical_address(&loc_raw) {
-                Some(directions_url_for(&loc_raw))
-            } else {
-                None
-            };
-            events.push(CalEvent {
-                summary: summary.trim().to_string(),
-                location: loc_raw,
-                all_day: true,
-                time_str: "All day".into(),
-                start_epoch: start as u64,
-                join_url,
-                join_kind,
-                directions_url,
-                leave_label: None,
-            });
-            continue;
+            if let Some(event) = event_for_occurrence(&props, start, all_day, begin, end, now) {
+                events.push(event);
+            }
         }
-        // Timed event. Resolve its instant to the local timezone.
-        let wall_start = timefmt::days_from_civil(cy, cm, cd) * 86400
-            + (hhmm.0 as i64 * 3600 + hhmm.1 as i64 * 60)
-            - if is_utc {
-                0
-            } else {
-                timefmt::local_offset_secs()
-            };
-        let t = timefmt_parts(wall_start);
-        let (ly, lm, ld, lh, lmn) = t;
-        if (ly, lm, ld) != (ty, tm, td) {
-            continue;
-        }
-        if wall_start < now - 3600 {
-            // not upcoming anymore; skip
-            continue;
-        }
-        let loc_raw = props
-            .get("LOCATION")
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-        let (join_url, join_kind) = extract_join_url(&props);
-        let directions_url = if is_physical_address(&loc_raw) {
-            Some(directions_url_for(&loc_raw))
-        } else {
-            None
-        };
-        events.push(CalEvent {
-            summary: summary.trim().to_string(),
-            location: loc_raw,
-            all_day: false,
-            time_str: format!("{:02}:{:02}", lh.min(23), lmn.min(59)),
-            start_epoch: wall_start as u64,
-            join_url,
-            join_kind,
-            directions_url,
-            leave_label: None,
-        });
     }
     events.sort_by_key(|e| e.start_epoch);
     events
 }
 
-/// Cheap local-time pieces for an epoch (shares libc localtime_r).
-fn timefmt_parts(epoch: i64) -> (i32, u32, u32, u32, u32) {
-    #[repr(C)]
-    struct CTm {
-        tm_sec: i32,
-        tm_min: i32,
-        tm_hour: i32,
-        tm_mday: i32,
-        tm_mon: i32,
-        tm_year: i32,
-        tm_wday: i32,
-        tm_yday: i32,
-        tm_isdst: i32,
-        tm_gmtoff: i64,
-        tm_zone: *const u8,
-    }
-    extern "C" {
-        fn localtime_r(timep: *const i64, result: *mut CTm) -> *mut CTm;
-    }
-    let mut c = CTm {
-        tm_sec: 0,
-        tm_min: 0,
-        tm_hour: 0,
-        tm_mday: 0,
-        tm_mon: 0,
-        tm_year: 0,
-        tm_wday: 0,
-        tm_yday: 0,
-        tm_isdst: 0,
-        tm_gmtoff: 0,
-        tm_zone: std::ptr::null(),
+/// The iterator's internal limit plus outer count/time limits bound hostile or
+/// accidentally huge recurrences, including infinitely repeating rules.
+fn recurrence_dates(text: &str, begin: i64, end: i64, deadline: Instant) -> Vec<i64> {
+    let Ok(set) = text.parse::<rrule::RRuleSet>() else {
+        log::debug!("calendar: invalid recurrence set skipped");
+        return vec![];
     };
-    unsafe {
-        localtime_r(&epoch, &mut c);
+    let start = *set.get_dt_start();
+    let set = set.rdate(start).limit();
+    let mut dates = Vec::new();
+    for (index, date) in set.into_iter().take(100_000).enumerate() {
+        if index % 64 == 0 && Instant::now() >= deadline {
+            break;
+        }
+        let epoch = date.timestamp();
+        if epoch >= end {
+            break;
+        }
+        if epoch >= begin {
+            if dates.last() != Some(&epoch) {
+                dates.push(epoch);
+            }
+            if dates.len() >= 256 {
+                break;
+            }
+        }
     }
-    (
-        c.tm_year + 1900,
-        (c.tm_mon + 1) as u32,
-        c.tm_mday as u32,
-        c.tm_hour as u32,
-        c.tm_min as u32,
+    dates
+}
+
+fn event_for_occurrence(
+    props: &Properties,
+    start: i64,
+    all_day: bool,
+    begin: i64,
+    end: i64,
+    now: i64,
+) -> Option<CalEvent> {
+    let summary = props
+        .get("SUMMARY")
+        .map(String::as_str)
+        .unwrap_or("(untitled)")
+        .trim();
+    let category = props
+        .get("CATEGORIES")
+        .map(|v| v.to_uppercase())
+        .unwrap_or_default();
+    if category.contains("BIRTHDAY") || category.contains("ANNIVERSARY") {
+        return None;
+    }
+    let title = summary.to_lowercase();
+    if title.contains("birthday") || title.contains("anniversary") || title.contains("holiday") {
+        return None;
+    }
+    let original_start = event_start(props)?.0.to_unix();
+    let duration = event_datetime(props, "DTEND")
+        .map(|(date, _)| (date.to_unix() - original_start).max(0))
+        .unwrap_or(0);
+    let finish = start.saturating_add(duration);
+    if start >= end || (start < begin && finish <= begin) {
+        return None;
+    }
+    if !all_day && start < now - 3600 && finish <= now {
+        return None;
+    }
+    let local = DateTime::from_unix_local(start).ok()?;
+    let location = props
+        .get("LOCATION")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let (join_url, join_kind) = extract_join_url(props);
+    let directions_url = is_physical_address(&location).then(|| directions_url_for(&location));
+    Some(CalEvent {
+        summary: summary.to_string(),
+        location,
+        all_day,
+        time_str: if all_day {
+            "All day".into()
+        } else {
+            format!("{:02}:{:02}", local.hour(), local.minute())
+        },
+        start_epoch: start.max(0) as u64,
+        join_url,
+        join_kind,
+        directions_url,
+        leave_label: None,
+    })
+}
+
+/// Resolve TZID/UTC/floating dates with GLib's timezone database, including DST.
+fn event_start(props: &std::collections::HashMap<String, String>) -> Option<(DateTime, bool)> {
+    event_datetime(props, "DTSTART")
+}
+
+fn event_datetime(props: &Properties, property: &str) -> Option<(DateTime, bool)> {
+    let (year, month, day, (hour, minute), utc, all_day) = parse_dtstart(props.get(property)?)?;
+    let timezone = if utc {
+        TimeZone::utc()
+    } else if let Some(tzid) = props.get(&format!("{property};TZID")) {
+        {
+            let id = tzid.trim_matches('"');
+            let zone = TimeZone::new(Some(id));
+            if zone.identifier().as_str() != id {
+                return None;
+            }
+            zone
+        }
+    } else {
+        TimeZone::local()
+    };
+    let start = DateTime::new(
+        &timezone,
+        year,
+        month as i32,
+        day as i32,
+        hour as i32,
+        minute as i32,
+        props
+            .get(property)
+            .and_then(|v| v.split_once('T'))
+            .and_then(|(_, t)| t.get(4..6))
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0)
+            .min(59) as f64,
     )
+    .ok()?;
+    Some((start, all_day))
 }
 
 /// Split text on BEGIN/END markers, returning interior content lines.
@@ -291,35 +471,72 @@ fn block_split(text: &str, begin: &str, end: &str) -> Vec<String> {
 /// Parse folded ICS lines into a map of the LAST value per property name.
 fn ics_props(block: &str) -> std::collections::HashMap<String, String> {
     let mut props = std::collections::HashMap::new();
-    let mut pending: Option<String> = None;
-    for raw in block.lines() {
-        let line = raw.trim_end_matches('\r');
-        if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(p) = pending.as_mut() {
-                p.push_str(line.trim_start());
-            }
+    let unfolded = unfold_ics(block);
+    for line in unfolded.lines() {
+        let Some((name, value)) = line.split_once(':') else {
             continue;
-        }
-        if let Some(p) = pending.take() {
-            if let Some(idx) = p.find(':') {
-                let raw_key = &p[..idx];
-                // strip parameters like ;TZID=... or ;VALUE=DATE so DTSTART;TZID=... → DTSTART
-                let key = raw_key.split(';').next().unwrap().to_uppercase();
-                let val = p[idx + 1..].to_string();
-                props.insert(key, val);
+        };
+        let mut parameters = name.split(';');
+        let key = parameters.next().unwrap_or_default().to_uppercase();
+        for parameter in parameters {
+            if let Some((name, value)) = parameter.split_once('=') {
+                if name.eq_ignore_ascii_case("TZID") {
+                    props.insert(format!("{key};TZID"), value.to_string());
+                }
             }
         }
-        pending = Some(line.to_string());
-    }
-    if let Some(p) = pending {
-        if let Some(idx) = p.find(':') {
-            let raw_key = &p[..idx];
-            let key = raw_key.split(';').next().unwrap().to_uppercase();
-            let val = p[idx + 1..].to_string();
-            props.insert(key, val);
-        }
+        props.insert(key, unescape_ics(value));
     }
     props
+}
+
+fn unfold_ics(block: &str) -> String {
+    let mut unfolded = String::new();
+    for line in block.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.starts_with(' ') || line.starts_with('\t') {
+            // RFC 5545 removes exactly one folding character, preserving content spaces.
+            unfolded.push_str(&line[1..]);
+        } else {
+            unfolded.push('\n');
+            unfolded.push_str(line);
+        }
+    }
+    // Alarm components have their own SUMMARY/DTSTART. They must not replace
+    // the surrounding event's fields or leak into the recurrence rule set.
+    let mut depth = 0_u32;
+    unfolded
+        .lines()
+        .filter(|line| {
+            if line.starts_with("BEGIN:") {
+                depth += 1;
+                return false;
+            }
+            if line.starts_with("END:") {
+                depth = depth.saturating_sub(1);
+                return false;
+            }
+            depth == 0
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn unescape_ics(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n' | 'N') => out.push('\n'),
+            Some(c) => out.push(c),
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 fn extract_join_url(
@@ -351,56 +568,41 @@ fn extract_join_url(
 }
 
 fn find_urls(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    let bytes = text.as_bytes();
-    while i < bytes.len() {
-        let rest = &text[i..];
-        let start = if let Some(p) = rest.find("https://") {
-            p
-        } else if let Some(p) = rest.find("http://") {
-            p
-        } else {
-            break;
-        };
-        let abs_start = i + start;
-        let mut end = abs_start;
-        while end < text.len() {
-            let c = text.as_bytes()[end] as char;
-            if c.is_whitespace()
-                || c == '"'
-                || c == '\''
-                || c == '>'
-                || c == '<'
-                || c == ')'
-                || c == ']'
-            {
-                break;
-            }
-            end += 1;
-        }
-        let mut url = text[abs_start..end].to_string();
-        // trim trailing punctuation like . , ;
-        while url.ends_with('.') || url.ends_with(',') || url.ends_with(';') || url.ends_with('!') {
-            url.pop();
-        }
+    let mut urls = Vec::new();
+    let mut rest = text;
+    while let Some(start) = [rest.find("https://"), rest.find("http://")]
+        .into_iter()
+        .flatten()
+        .min()
+    {
+        rest = &rest[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '>' | '<' | ')' | ']'))
+            .unwrap_or(rest.len());
+        let url = rest[..end].trim_end_matches(['.', ',', ';', '!']);
         if url.len() > 10 {
-            out.push(url);
+            urls.push(url.to_string());
         }
-        i = end;
+        rest = &rest[end..];
     }
-    out
+    urls
 }
 
 fn classify_join_url(url: &str) -> Option<String> {
-    let l = url.to_lowercase();
-    if l.contains("meet.google.com") {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.contains('@') {
+        return None;
+    }
+    let host = authority.split(':').next()?.to_ascii_lowercase();
+    let matches = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    if host == "meet.google.com" {
         Some("Meet".into())
-    } else if l.contains("zoom.us") || l.contains("zoom.com") {
+    } else if matches("zoom.us") || matches("zoom.com") {
         Some("Zoom".into())
-    } else if l.contains("teams.microsoft.com")
-        || l.contains("teams.live.com")
-        || l.contains("teams.microsoft")
+    } else if matches("teams.microsoft.com")
+        || matches("teams.live.com")
+        || matches("teams.cloud.microsoft")
     {
         Some("Teams".into())
     } else {
@@ -440,21 +642,6 @@ fn directions_url_for(address: &str) -> String {
     )
 }
 
-fn encode_uri_component(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        let c = b as char;
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
-            out.push(c);
-        } else if c == ' ' {
-            out.push('+');
-        } else {
-            out.push_str(&format!("%{:02X}", b));
-        }
-    }
-    out
-}
-
 /// Returns (y, m, d, (h, m), is_utc, all_day).
 #[allow(clippy::type_complexity)]
 fn parse_dtstart(s: &str) -> Option<(i32, u32, u32, (u32, u32), bool, bool)> {
@@ -464,19 +651,32 @@ fn parse_dtstart(s: &str) -> Option<(i32, u32, u32, (u32, u32), bool, bool)> {
         Some((d, t)) => (d, Some(t)),
         None => (value, None),
     };
-    if date.len() != 8 {
+    if date.len() != 8 || !date.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let y: i32 = date[0..4].parse().ok()?;
     let m: u32 = date[4..6].parse().ok()?;
     let d: u32 = date[6..8].parse().ok()?;
+    if !(1..=9999).contains(&y)
+        || !(1..=12).contains(&m)
+        || d == 0
+        || d > timefmt::days_in_month(y, m)
+    {
+        return None;
+    }
     match time {
         None => Some((y, m, d, (0, 0), false, true)),
         Some(t) => {
             let utc = t.ends_with('Z');
             let t = t.trim_end_matches('Z');
+            if !matches!(t.len(), 4 | 6) || !t.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
             let h: u32 = t.get(0..2)?.parse().ok()?;
             let mi: u32 = t.get(2..4)?.parse().ok()?;
+            if h > 23 || mi > 59 || (t.len() == 6 && t[4..6].parse::<u32>().ok()? > 60) {
+                return None;
+            }
             Some((y, m, d, (h, mi), utc, false))
         }
     }
@@ -514,5 +714,125 @@ mod tests {
         let text = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Alex's birthday (30)\nCATEGORIES:BIRTHDAY\nDTSTART;VALUE=DATE:20260827\nEND:VEVENT\nEND:VCALENDAR";
         // Any date regardless — category filter drops it before date handling.
         assert_eq!(parse_ics(text).len(), 0);
+    }
+
+    #[test]
+    fn rejects_malformed_dates_without_panicking() {
+        for value in [
+            "éééé",
+            "20260230",
+            "20261301",
+            "20260101T256000",
+            "20260101T1200garbage",
+        ] {
+            assert!(parse_dtstart(value).is_none(), "{value}");
+        }
+        assert!(parse_dtstart("20240229T123000Z").is_some());
+    }
+
+    #[test]
+    fn honors_calendar_timezone_and_daylight_saving() {
+        let summer = event_start(&ics_props("DTSTART;TZID=America/New_York:20260701T090000"))
+            .unwrap()
+            .0;
+        let winter = event_start(&ics_props("DTSTART;TZID=America/New_York:20260101T090000"))
+            .unwrap()
+            .0;
+        assert_eq!(summer.to_utc().unwrap().hour(), 13);
+        assert_eq!(winter.to_utc().unwrap().hour(), 14);
+        assert!(event_start(&ics_props("DTSTART;TZID=Invalid/Zone:20260701T090000")).is_none());
+    }
+
+    #[test]
+    fn unfolds_exactly_one_space_and_decodes_escaped_text() {
+        let props =
+            ics_props("SUMMARY:Plan\\, review\\; ship\n  today\nDESCRIPTION:Line one\\nLine two");
+        assert_eq!(props["SUMMARY"], "Plan, review; ship today");
+        assert_eq!(props["DESCRIPTION"], "Line one\nLine two");
+    }
+
+    #[test]
+    fn meeting_links_require_real_provider_hosts() {
+        assert_eq!(
+            classify_join_url("https://company.zoom.us/j/123").as_deref(),
+            Some("Zoom")
+        );
+        assert!(classify_join_url("https://zoom.us.attacker.test/j/123").is_none());
+        assert!(classify_join_url("https://attacker.test/?url=meet.google.com").is_none());
+        assert_eq!(
+            find_urls("http://first.test https://meet.google.com/abc。 next").len(),
+            2
+        );
+        assert_eq!(
+            find_urls("https://meet.google.com/abc\u{2003}after"),
+            vec!["https://meet.google.com/abc"]
+        );
+    }
+
+    fn epoch(value: &str) -> i64 {
+        DateTime::from_iso8601(value, None).unwrap().to_unix()
+    }
+
+    #[test]
+    fn recurring_meetings_follow_dst_and_excluded_dates() {
+        let dates = recurrence_dates(
+            "DTSTART;TZID=America/New_York:20261025T090000\nRRULE:FREQ=WEEKLY;COUNT=4\nEXDATE;TZID=America/New_York:20261108T090000",
+            epoch("2026-10-25T00:00:00Z"), epoch("2026-11-20T00:00:00Z"),
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert_eq!(
+            dates,
+            vec![
+                epoch("2026-10-25T13:00:00Z"),
+                epoch("2026-11-01T14:00:00Z"),
+                epoch("2026-11-15T14:00:00Z")
+            ]
+        );
+    }
+
+    #[test]
+    fn detached_edits_and_cancellations_replace_original_instances() {
+        let calendar = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:standup\nSUMMARY:Standup\nLOCATION:Room 2\nDTSTART:20260901T150000Z\nRRULE:FREQ=DAILY;COUNT=10\nEND:VEVENT\nBEGIN:VEVENT\nUID:standup\nRECURRENCE-ID:20260905T150000Z\nDTSTART:20260905T170000Z\nSUMMARY:Delayed standup\nSEQUENCE:2\nEND:VEVENT\nEND:VCALENDAR";
+        let now = epoch("2026-09-05T12:00:00Z");
+        let events = parse_ics_at(calendar, now);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].summary, "Delayed standup");
+        assert_eq!(events[0].location, "Room 2");
+        assert_eq!(events[0].start_epoch, epoch("2026-09-05T17:00:00Z") as u64);
+        let cancelled = calendar.replace("SEQUENCE:2", "SEQUENCE:2\nSTATUS:CANCELLED");
+        assert!(parse_ics_at(&cancelled, now).is_empty());
+    }
+
+    #[test]
+    fn all_day_recurrence_and_duplicate_revisions_are_supported() {
+        let calendar = "BEGIN:VEVENT\nUID:planning\nSUMMARY:Old\nDTSTART;VALUE=DATE:20260901\nRRULE:FREQ=DAILY;COUNT=6\nSEQUENCE:1\nEND:VEVENT\nBEGIN:VEVENT\nUID:planning\nSUMMARY:Planning\nDTSTART;VALUE=DATE:20260901\nRRULE:FREQ=DAILY;COUNT=6\nSEQUENCE:2\nEND:VEVENT";
+        let now = DateTime::from_local(2026, 9, 5, 12, 0, 0.0)
+            .unwrap()
+            .to_unix();
+        let events = parse_ics_at(calendar, now);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].all_day);
+        assert_eq!(events[0].summary, "Planning");
+    }
+
+    #[test]
+    fn recurrence_results_and_processing_are_bounded() {
+        let begin = epoch("2026-09-05T00:00:00Z");
+        let text = "DTSTART:20260905T000000Z\nRRULE:FREQ=SECONDLY";
+        let dates = recurrence_dates(
+            text,
+            begin,
+            begin + 86400,
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert_eq!(dates.len(), 256);
+        assert!(recurrence_dates(text, begin, begin + 86400, Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn embedded_alarm_cannot_override_event_details() {
+        let props = ics_props("SUMMARY:Actual meeting\nDTSTART:20260905T120037Z\nBEGIN:VALARM\nSUMMARY:Alarm\nDTSTART:20260905T110000Z\nEND:VALARM");
+        assert_eq!(props["SUMMARY"], "Actual meeting");
+        assert_eq!(event_start(&props).unwrap().0.second(), 37);
     }
 }

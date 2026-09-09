@@ -21,6 +21,7 @@ enum Mood {
 
 pub struct PillUi {
     pub win: ApplicationWindow,
+    canvas: gtk4::DrawingArea,
     root: gtk4::Box,
     left_box: gtk4::Box,
     mid_box: gtk4::Box,
@@ -199,14 +200,15 @@ impl PillUi {
             });
         }
         overlay.add_overlay(&root);
-        set_pill_canvas(canvas.clone());
         win.set_child(Some(&overlay));
 
         // Click toggles
         let click = GestureClick::new();
         {
             let cb = on_click.clone();
+            let monitor = monitor.cloned();
             click.connect_released(move |_g, _n, _x, _y| {
+                crate::app::activate_monitor(monitor.as_ref());
                 if let Some(f) = cb.borrow().as_ref() {
                     f();
                 }
@@ -217,8 +219,10 @@ impl PillUi {
         // Hover directly on pill expands too
         {
             let sh = shared.clone();
+            let monitor = monitor.cloned();
             let motion = EventControllerMotion::new();
             motion.connect_enter(move |_m, _x, _y| {
+                crate::app::activate_monitor(monitor.as_ref());
                 crate::app::surface_pointer_enter();
                 if !sh.expanded.get() && !sh.fullscreen_hide.get() && sh.hover_enabled() {
                     sh.expand_now();
@@ -229,10 +233,13 @@ impl PillUi {
             });
             win.add_controller(motion);
         }
-        super::panel::attach_file_drop(&win);
+        if shared.cfg.borrow().features.shelf {
+            super::panel::attach_file_drop(&win);
+        }
 
         let p = Self {
             win,
+            canvas,
             root,
             left_box,
             mid_box: notch_box,
@@ -416,12 +423,22 @@ impl PillUi {
             self.files_pile.remove(&c);
         }
         let size = 28;
+        let pile = gtk4::Overlay::new();
         for (i, item) in items.iter().rev().take(3).enumerate() {
             let shot = mini_thumb(item, size);
-            if i > 0 {
-                shot.set_margin_start(-12);
+            shot.set_halign(gtk4::Align::Start);
+            shot.set_margin_start(i as i32 * 16);
+            if i == 0 {
+                pile.set_child(Some(&shot));
+            } else {
+                // Overlap without negative margins: every thumbnail contributes
+                // its real size and positive offset to the stack's measurement.
+                pile.add_overlay(&shot);
+                pile.set_measure_overlay(&shot, true);
             }
-            self.files_pile.append(&shot);
+        }
+        if !items.is_empty() {
+            self.files_pile.append(&pile);
         }
     }
 
@@ -433,9 +450,7 @@ impl PillUi {
         let flash = self.flash.clone();
         let vel = self.flash_vel.clone();
         let slot = self.flash_tick.clone();
-        let Some(canvas) = pill_canvas() else {
-            return;
-        };
+        let canvas = self.canvas.clone();
         canvas.queue_draw();
         let canvas2 = canvas.clone();
         motion::drive(&slot, &canvas, move |dt| {
@@ -543,7 +558,10 @@ fn mini_thumb(item: &crate::shelf_store::ShelfItem, size: i32) -> gtk4::Box {
     wrap.set_overflow(gtk4::Overflow::Hidden);
     wrap.set_valign(gtk4::Align::Center);
     if (item.kind == "image" || item.mime.starts_with("image/")) && !item.path.is_empty() {
-        if let Ok(tex) = gdk::Texture::from_filename(std::path::Path::new(&item.path)) {
+        if let Ok(pixbuf) =
+            gtk4::gdk_pixbuf::Pixbuf::from_file_at_scale(&item.path, size * 2, size * 2, true)
+        {
+            let tex = gdk::Texture::for_pixbuf(&pixbuf);
             let pic = gtk4::Picture::for_paintable(&tex);
             pic.set_size_request(size, size);
             pic.set_content_fit(gtk4::ContentFit::Cover);
@@ -573,26 +591,8 @@ fn apply_size(win: &ApplicationWindow, root: &gtk4::Box, w: i32, h: i32) {
     win.set_height_request(h);
     root.set_width_request(w);
     root.set_height_request(h);
-    if let Some(c) = pill_canvas() {
-        c.set_content_width(w);
-        c.set_content_height(h);
-        c.set_size_request(w, h);
-        c.queue_draw();
-    }
+    win.queue_draw();
     win.queue_resize();
-}
-
-thread_local! {
-    /// Handle to the pill's canvas so the flash loop can reach it.
-    static PILL_CANVAS: RefCell<Option<gtk4::DrawingArea>> = const { RefCell::new(None) };
-}
-
-fn set_pill_canvas(c: gtk4::DrawingArea) {
-    PILL_CANVAS.with(|w| *w.borrow_mut() = Some(c));
-}
-
-fn pill_canvas() -> Option<gtk4::DrawingArea> {
-    PILL_CANVAS.with(|w| w.borrow().clone())
 }
 
 /// Draw the notch silhouette, matching the canonical macOS "dynamic island /
@@ -636,5 +636,17 @@ impl Shared {
         if let Some(f) = self.expand_all_cb.borrow().as_ref() {
             f();
         }
+    }
+}
+
+impl Drop for PillUi {
+    fn drop(&mut self) {
+        if let Some(tick) = self.flash_tick.take() {
+            tick.remove();
+        }
+        if let Some(tick) = self.w_tick.take() {
+            tick.remove();
+        }
+        self.win.destroy();
     }
 }

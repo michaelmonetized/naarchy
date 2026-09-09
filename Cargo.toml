@@ -1,8 +1,8 @@
 [package]
 name = "naarchy"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.92"
 description = "A free, open-source notch / dynamic-island layer for Omarchy & Hyprland — file shelf, clipboard, media, HUDs."
 license = "MIT"
 repository = "https://github.com/michaelmonetized/naarchy"
@@ -24,6 +24,7 @@ wl-clipboard-rs = "0.9"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 log = "0.4"
 env_logger = "0.11"
+rrule = { version = "0.14", default-features = false }
 
 [profile.release]
 lto = "thin"

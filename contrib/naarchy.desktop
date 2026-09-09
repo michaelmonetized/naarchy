@@ -1,6 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Naarchy
+Icon=app.naarchy.Naarchy
 Comment=Notch island — file shelf, clipboard, media, HUDs
 Exec=naarchy run
 TryExec=naarchy

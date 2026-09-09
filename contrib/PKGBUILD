@@ -1,39 +1,41 @@
 # Maintainer: Michael C Hurley <michaelmonetized@gmail.com>
 pkgname=naarchy
-pkgver=0.3.3
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Notch / dynamic-island overlay for Omarchy and Hyprland"
 arch=('x86_64' 'aarch64')
 url="https://github.com/michaelmonetized/naarchy"
 license=('MIT')
-depends=(gtk4 gtk4-layer-shell)
+depends=(gtk4 gtk4-layer-shell xdg-utils)
 optdepends=(
   'pamixer: volume HUD auto-detect'
   'brightnessctl: brightness HUD auto-detect'
   'pipewire-audio: timer chime via pw-play'
   'ttf-jetbrains-mono-nerd: default dock glyphs'
 )
-makedepends=(cargo)
+makedepends=('rust>=1.92' cargo git)
 options=(!lto)
-source=("$pkgname-$pkgver.tar.gz::https://github.com/michaelmonetized/naarchy/archive/refs/tags/v$pkgver.tar.gz")
+# Build the tagged source tree; git sources use makepkg's VCS integrity handling.
+source=("git+https://github.com/michaelmonetized/naarchy.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
 prepare() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
 }
 
 build() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release
 }
 
 package() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname"
   install -Dm755 "target/release/naarchy" "$pkgdir/usr/bin/naarchy"
+  install -Dm644 "contrib/app.naarchy.Naarchy.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/app.naarchy.Naarchy.svg"
   install -Dm644 "contrib/naarchy.desktop" "$pkgdir/usr/share/applications/naarchy.desktop"
   install -Dm644 "contrib/naarchy.service" "$pkgdir/usr/lib/systemd/user/naarchy.service"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

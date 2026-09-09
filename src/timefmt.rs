@@ -9,7 +9,6 @@ pub struct Tm {
     pub min: u32,
     pub sec: u32,
     pub weekday: u32, // 0=Sun..6=Sat
-    pub gmtoff: i64,  // seconds east of UTC
 }
 
 fn localtime(secs: u64) -> Tm {
@@ -55,7 +54,6 @@ fn localtime(secs: u64) -> Tm {
         min: c.tm_min as u32,
         sec: c.tm_sec as u32,
         weekday: (((c.tm_wday % 7) + 7) % 7) as u32,
-        gmtoff: c.tm_gmtoff,
     }
 }
 
@@ -92,7 +90,6 @@ pub fn strftime_utc(epoch: u64, fmt: &str) -> String {
         min: ((rem % 3600) / 60) as u32,
         sec: (rem % 60) as u32,
         weekday: (((days % 7) + 11) % 7) as u32, // Sun=0
-        gmtoff: 0,
     };
     render(fmt, &t)
 }
@@ -179,12 +176,6 @@ pub fn now_epoch() -> u64 {
 #[allow(dead_code)]
 pub fn month_name(m: u32) -> &'static str {
     MONTHS_FULL[(m.clamp(1, 12) - 1) as usize]
-}
-
-/// Seconds east of UTC for the local zone, from libc's tm_gmtoff.
-pub fn local_offset_secs() -> i64 {
-    let t = localtime(now_epoch());
-    t.gmtoff
 }
 
 /// Days since 1970-01-01 for a proleptic-Gregorian civil date.

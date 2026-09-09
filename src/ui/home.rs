@@ -8,6 +8,7 @@ use super::{label, vbox, Shared};
 use crate::widget_store::WidgetKind;
 use gtk4::prelude::*;
 use gtk4::{gdk, glib, DropTarget, Label};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 pub const WIDGET_MIME: &str = "text/x-naarchy-widget";
@@ -25,12 +26,33 @@ pub struct HomePage {
     root: gtk4::Box,
     grid: gtk4::Grid,
     slots: Vec<Slot>,
+    empty: gtk4::Box,
+    active: RefCell<Vec<WidgetKind>>,
 }
 
 impl HomePage {
     pub fn build(shared: &Rc<Shared>) -> Self {
-        let root = vbox(0);
+        let root = vbox(12);
         root.set_css_classes(&["na-panel-pad"]);
+        let head = super::hbox(12);
+        let heading = super::page_heading(
+            "Make room for your day",
+            "Your essentials, a little closer.",
+        );
+        heading.set_hexpand(true);
+        head.append(&heading);
+        let customize = gtk4::Button::with_label("Customize");
+        customize.set_css_classes(&["na-btn", "ghost"]);
+        customize.set_valign(gtk4::Align::Center);
+        {
+            let shared = shared.clone();
+            customize.connect_clicked(move |_| {
+                shared.tab.set(super::Tab::Widgets);
+                shared.expand_now();
+            });
+        }
+        head.append(&customize);
+        root.append(&head);
 
         let grid = gtk4::Grid::new();
         grid.set_column_spacing(12);
@@ -39,6 +61,8 @@ impl HomePage {
         grid.set_hexpand(true);
         grid.set_vexpand(true);
         root.append(&grid);
+        let empty = super::empty_state(super::g::GRID, "A space that's yours", "Choose Customize to add a timer, your music or a clock. Keep the things you use close.");
+        root.append(&empty);
 
         let mut slots = Vec::new();
         for kind in WidgetKind::all() {
@@ -47,8 +71,21 @@ impl HomePage {
             slot_box.set_hexpand(true);
             slot_box.set_vexpand(true);
 
+            let heading = label(
+                &["na-widget-heading"],
+                match kind {
+                    WidgetKind::Timer => "FOCUS TIMER",
+                    WidgetKind::Media => "NOW PLAYING",
+                    WidgetKind::Clock => "LOCAL TIME",
+                },
+            );
+            heading.set_xalign(0.0);
+            slot_box.append(&heading);
+
             let body = vbox(4);
             body.set_hexpand(true);
+            body.set_vexpand(true);
+            body.set_valign(gtk4::Align::Center);
             slot_box.append(&body);
 
             let mut clock_lbl = None;
@@ -110,24 +147,52 @@ impl HomePage {
         }
         grid.add_controller(dt);
 
-        let p = Self { root, grid, slots };
+        let p = Self {
+            root,
+            grid,
+            slots,
+            empty,
+            active: RefCell::new(Vec::new()),
+        };
         p.apply_store();
         p
     }
 
     /// Reorder + show children to match the current widget store.
     pub fn apply_store(&self) {
+        let kinds: Vec<WidgetKind> = super::with_shared(|sh| {
+            sh.widgets
+                .borrow()
+                .widgets
+                .iter()
+                .copied()
+                .filter(|kind| match kind {
+                    WidgetKind::Media => sh.cfg.borrow().features.media,
+                    WidgetKind::Timer => sh.cfg.borrow().features.timer,
+                    _ => true,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+        self.empty.set_visible(kinds.is_empty());
+        self.grid.set_visible(!kinds.is_empty());
+        if *self.active.borrow() == kinds {
+            return;
+        }
+        *self.active.borrow_mut() = kinds.clone();
         while let Some(c) = self.grid.first_child() {
             self.grid.remove(&c);
         }
-        let kinds: Vec<WidgetKind> =
-            super::with_shared(|sh| sh.widgets.borrow().widgets.clone()).unwrap_or_default();
         let n = kinds.len();
         for (i, kind) in kinds.into_iter().enumerate() {
             if let Some(slot) = self.slots.iter().find(|s| s.kind == kind) {
                 let col = if n == 1 { 0 } else { (i % 2) as i32 };
                 let row = if n == 1 { 0 } else { (i / 2) as i32 };
-                let span = if n == 1 { 2 } else { 1 };
+                let span = if n == 1 || (n % 2 == 1 && i == n - 1) {
+                    2
+                } else {
+                    1
+                };
                 self.grid.attach(&slot.box_, col, row, span, 1);
             }
         }
@@ -149,8 +214,8 @@ impl HomePage {
                 let now = super::now_secs();
                 let fmt = super::with_shared(|sh| sh.cfg.borrow().clock.format.clone())
                     .unwrap_or_else(|| "%H:%M".into());
-                l.set_text(&fmt_clock(now, &fmt));
-                d.set_text(&crate::timefmt::strftime_local(now, "%A, %b %e"));
+                super::set_label_text(l, &fmt_clock(now, &fmt));
+                super::set_label_text(d, &crate::timefmt::strftime_local(now, "%A, %b %e"));
             }
         }
     }
@@ -159,16 +224,6 @@ impl HomePage {
         for s in &self.slots {
             if let Some(m) = s.media.as_ref() {
                 m.update();
-            }
-        }
-    }
-
-    pub fn timer_start(&self, secs: u64) {
-        for s in &self.slots {
-            if s.kind == WidgetKind::Timer {
-                if let Some(t) = s.timer.as_ref() {
-                    t.start(secs);
-                }
             }
         }
     }

@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 const PX_PER_MIN: f64 = 12.0;
 const MIN_SECS: u64 = 1;
-const MAX_SECS: u64 = 24 * 3600;
+pub const MAX_SECS: u64 = 7 * 24 * 3600;
 const DEFAULT_SECS: u64 = 5 * 60;
 const CLICK_PX: f64 = 6.0;
 
@@ -20,6 +20,7 @@ pub struct TimerUi {
     ruler: gtk4::DrawingArea,
     time_lbl: Label,
     start_btn: Button,
+    reset_btn: Button,
     picked: Rc<Cell<u64>>,
 }
 
@@ -36,6 +37,11 @@ impl TimerUi {
         ruler.set_hexpand(true);
         ruler.set_height_request(72);
         ruler.set_halign(gtk4::Align::Fill);
+        ruler.set_focusable(true);
+        super::describe(
+            &ruler,
+            "Timer duration. Drag, scroll or use arrow keys to adjust; Enter to start or pause.",
+        );
         ruler.set_cursor(gdk::Cursor::from_name("sb_h_double_arrow", None).as_ref());
         {
             let sh = shared.clone();
@@ -97,7 +103,7 @@ impl TimerUi {
                 }
                 let mins = origin.get() - dx / PX_PER_MIN;
                 let secs = clamp_secs((mins * 60.0).round().max(0.0) as u64);
-                picked.set(secs);
+                select_duration(&sh, &picked, secs);
                 time2.set_text(&fmt_hms(secs));
                 ruler2.queue_draw();
             });
@@ -130,10 +136,10 @@ impl TimerUi {
                     return gtk4::glib::Propagation::Stop;
                 }
                 let delta = if dy.abs() >= dx.abs() { dy } else { dx };
-                let mins = picked.get() as f64 / 60.0 - delta;
+                let mins = scrub_origin(&sh, picked.get()) - delta;
                 let snapped = mins.round().clamp(1.0, (MAX_SECS / 60) as f64);
                 let secs = clamp_secs((snapped as u64).saturating_mul(60));
-                picked.set(secs);
+                select_duration(&sh, &picked, secs);
                 time2.set_text(&fmt_hms(secs));
                 ruler2.queue_draw();
                 gtk4::glib::Propagation::Stop
@@ -145,11 +151,78 @@ impl TimerUi {
         row.append(&time_lbl);
         root.append(&row);
 
+        let presets = super::hbox(6);
+        for minutes in [5, 15, 25] {
+            let preset = Button::with_label(&format!("{minutes} min"));
+            preset.set_css_classes(&["na-preset"]);
+            super::describe(&preset, &format!("Start a {minutes} minute timer"));
+            let sh = shared.clone();
+            let picked = picked.clone();
+            let time = time_lbl.clone();
+            let start = start_btn.clone();
+            let ruler = ruler.clone();
+            preset.connect_clicked(move |_| {
+                picked.set(minutes * 60);
+                start_timer(&sh, picked.get());
+                paint(&sh, picked.get(), &time, &start, &ruler);
+            });
+            presets.append(&preset);
+        }
+        let reset_btn = Button::with_label("Reset");
+        reset_btn.set_css_classes(&["na-preset"]);
+        reset_btn.set_tooltip_text(Some("Stop and reset the timer"));
+        reset_btn.connect_clicked(|_| crate::app::dismiss_timer());
+        presets.append(&reset_btn);
+        root.append(&presets);
+
+        {
+            let key = gtk4::EventControllerKey::new();
+            let sh = shared.clone();
+            let picked = picked.clone();
+            let time = time_lbl.clone();
+            let start = start_btn.clone();
+            let ruler_weak = ruler.downgrade();
+            key.connect_key_pressed(move |_, key, _, mods| {
+                let Some(ruler) = ruler_weak.upgrade() else {
+                    return gtk4::glib::Propagation::Proceed;
+                };
+                if key == gdk::Key::Return || key == gdk::Key::space {
+                    handle_press(&sh, picked.get(), false, &time, &start, &ruler);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                let step = if mods.contains(gdk::ModifierType::SHIFT_MASK) {
+                    300
+                } else {
+                    60
+                };
+                let next = match key {
+                    gdk::Key::Right | gdk::Key::Up => {
+                        Some((scrub_origin(&sh, picked.get()) * 60.0).round() as u64 + step)
+                    }
+                    gdk::Key::Left | gdk::Key::Down => Some(
+                        ((scrub_origin(&sh, picked.get()) * 60.0).round() as u64)
+                            .saturating_sub(step),
+                    ),
+                    _ => None,
+                };
+                if let Some(next) = next.filter(|_| !is_running(&sh) && !is_done(&sh)) {
+                    select_duration(&sh, &picked, clamp_secs(next));
+                    time.set_text(&fmt_hms(picked.get()));
+                    ruler.queue_draw();
+                    gtk4::glib::Propagation::Stop
+                } else {
+                    gtk4::glib::Propagation::Proceed
+                }
+            });
+            ruler.add_controller(key);
+        }
+
         let p = Self {
             root,
             ruler,
             time_lbl,
             start_btn,
+            reset_btn,
             picked,
         };
         p.refresh();
@@ -160,15 +233,10 @@ impl TimerUi {
         &self.root
     }
 
-    pub fn start(&self, secs: u64) {
-        let secs = clamp_secs(secs.max(MIN_SECS));
-        self.picked.set(secs);
-        super::with_shared(|sh| start_timer(sh, secs));
-        self.refresh();
-    }
-
     pub fn refresh(&self) {
         super::with_shared(|sh| {
+            self.reset_btn
+                .set_sensitive(sh.timer.borrow().is_some() || is_done(sh));
             paint(
                 sh,
                 self.picked.get(),
@@ -247,38 +315,58 @@ fn paint(
     ruler: &gtk4::DrawingArea,
 ) {
     let done_on = is_done(sh);
+    let previous_text = time_lbl.text();
     match sh.timer.borrow().as_ref() {
         Some(t) => {
             let rem = t.remaining_secs();
-            time_lbl.set_text(&fmt_hms(rem));
+            super::set_label_text(time_lbl, &fmt_hms(rem));
             if done_on || rem == 0 && !t.running() && t.paused_remaining.is_none() {
                 time_lbl.add_css_class("na-timer-done");
-                start_btn.set_label("Dismiss");
+                set_button_label(start_btn, "Dismiss");
             } else if t.paused_remaining.is_some() {
                 time_lbl.remove_css_class("na-timer-done");
-                start_btn.set_label("Resume");
+                set_button_label(start_btn, "Resume");
             } else {
                 time_lbl.remove_css_class("na-timer-done");
-                start_btn.set_label("Pause");
+                set_button_label(start_btn, "Pause");
             }
         }
         None => {
             if done_on {
-                time_lbl.set_text(&fmt_hms(0));
+                super::set_label_text(time_lbl, &fmt_hms(0));
                 time_lbl.add_css_class("na-timer-done");
-                start_btn.set_label("Dismiss");
+                set_button_label(start_btn, "Dismiss");
             } else {
-                time_lbl.set_text(&fmt_hms(picked));
+                super::set_label_text(time_lbl, &fmt_hms(picked));
                 time_lbl.remove_css_class("na-timer-done");
-                start_btn.set_label("Start Timer");
+                set_button_label(start_btn, "Start Timer");
             }
         }
     }
     let grab = !is_running(sh) && !done_on;
-    ruler.set_cursor(
-        gdk::Cursor::from_name(if grab { "sb_h_double_arrow" } else { "pointer" }, None).as_ref(),
-    );
-    ruler.queue_draw();
+    let cursor_name = if grab { "sb_h_double_arrow" } else { "pointer" };
+    if ruler.cursor().and_then(|c| c.name()).as_deref() != Some(cursor_name) {
+        ruler.set_cursor_from_name(Some(cursor_name));
+    }
+    if previous_text != time_lbl.text() || done_on {
+        ruler.queue_draw();
+    }
+}
+
+fn set_button_label(button: &Button, text: &str) {
+    if button.label().as_deref() != Some(text) {
+        button.set_label(text);
+    }
+}
+
+fn select_duration(shared: &Rc<Shared>, picked: &Cell<u64>, secs: u64) {
+    picked.set(secs);
+    if let Some(timer) = shared.timer.borrow_mut().as_mut() {
+        if timer.paused_remaining.is_some() {
+            timer.paused_remaining = Some(secs);
+            timer.total = secs;
+        }
+    }
 }
 
 fn display_minutes(sh: &Rc<Shared>, picked: u64) -> f64 {
@@ -360,7 +448,8 @@ fn draw_ruler(cr: &Context, w: f64, h: f64, minutes: f64, accent: (u8, u8, u8), 
     let _ = cr.fill();
 }
 
-fn start_timer(shared: &Rc<Shared>, secs: u64) {
+pub(crate) fn start_timer(shared: &Rc<Shared>, secs: u64) {
+    let secs = clamp_secs(secs);
     crate::chime::alarm_stop();
     crate::app::silence_bell();
     *shared.timer.borrow_mut() = Some(TimerState {
@@ -395,5 +484,6 @@ mod tests {
         assert_eq!(clamp_secs(0), 1);
         assert_eq!(clamp_secs(MAX_SECS + 10), MAX_SECS);
         assert_eq!(clamp_secs(300), 300);
+        assert_eq!(clamp_secs(48 * 3600), 48 * 3600);
     }
 }

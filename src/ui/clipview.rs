@@ -5,24 +5,41 @@ use gtk4::prelude::*;
 use gtk4::{Button, Entry, GestureClick, Label, ListBox, ListBoxRow};
 use std::rc::Rc;
 
+type RowCache = Rc<std::cell::RefCell<std::collections::HashMap<String, (bool, ListBoxRow)>>>;
+
 pub struct ClipPage {
     root: gtk4::Box,
     list: ListBox,
-    empty: Label,
+    empty: gtk4::Box,
+    scroll: gtk4::ScrolledWindow,
+    search: Entry,
+    clear_btn: Button,
+    status: Label,
+    rows: RowCache,
 }
 
 impl ClipPage {
     pub fn build(shared: &Rc<Shared>) -> Self {
         let root = super::vbox(10);
         root.set_css_classes(&["na-panel-pad"]);
+        root.append(&super::page_heading(
+            "Clipboard",
+            "A little memory for everything you copy.",
+        ));
 
         let head = super::hbox(8);
         let search = Entry::new();
-        search.set_placeholder_text(Some("Search clipboard"));
+        search.set_placeholder_text(Some("Search text and images…"));
         search.set_css_classes(&["na-entry"]);
         search.set_hexpand(true);
-        let clear_btn = Button::with_label("Clear");
+        search.set_icon_from_icon_name(
+            gtk4::EntryIconPosition::Primary,
+            Some("system-search-symbolic"),
+        );
+        super::describe(&search, "Search clipboard history");
+        let clear_btn = Button::with_label("Clear history");
         clear_btn.set_css_classes(&["na-btn", "ghost"]);
+        super::describe(&clear_btn, "Clear history and keep pinned items");
         {
             let sh = shared.clone();
             clear_btn.connect_clicked(move |_| {
@@ -38,31 +55,64 @@ impl ClipPage {
         scroll.set_vexpand(true);
         scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
         scroll.set_css_classes(&["na-scroll"]);
-        scroll.set_min_content_height(180);
-
+        scroll.set_min_content_height(140);
         let list = ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::None);
         list.add_css_class("na-clip-list");
         scroll.set_child(Some(&list));
         root.append(&scroll);
 
-        let empty = label(&["na-empty"], "Copy anything. It shows up here.");
-        empty.set_vexpand(true);
-        empty.set_valign(gtk4::Align::Center);
-        empty.set_halign(gtk4::Align::Center);
+        let empty = super::empty_state(
+            g::CLIP,
+            "Ready when you copy",
+            "Copy text or an image in any app. Your recent clips will be waiting here.",
+        );
         root.append(&empty);
-
+        let status = label(&["na-mute"], "Enter to copy · Right-click for more");
+        status.set_xalign(0.0);
+        root.append(&status);
+        let rows = Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
         {
             let sh = shared.clone();
             let l = list.clone();
             let em = empty.clone();
+            let sc = scroll.clone();
+            let cb = clear_btn.clone();
+            let status = status.clone();
+            let rows = rows.clone();
             search.connect_changed(move |e| {
-                rebuild(&sh, &l, &em, Some(e.text().as_str()));
+                rebuild(&sh, &l, &em, &sc, &cb, &status, &rows, e.text().as_str())
             });
         }
-
-        let p = Self { root, list, empty };
-        p.reload(None);
+        {
+            let list = list.clone();
+            search.connect_activate(move |_| {
+                if let Some(row) = list.row_at_index(0) {
+                    row.grab_focus();
+                    row.activate();
+                }
+            });
+        }
+        let p = Self {
+            root,
+            list,
+            empty,
+            scroll,
+            search,
+            clear_btn,
+            status,
+            rows,
+        };
+        rebuild(
+            shared,
+            &p.list,
+            &p.empty,
+            &p.scroll,
+            &p.clear_btn,
+            &p.status,
+            &p.rows,
+            "",
+        );
         p
     }
 
@@ -70,35 +120,126 @@ impl ClipPage {
         &self.root
     }
 
+    pub fn focus_search(&self) {
+        self.search.grab_focus();
+    }
+
     pub fn reload(&self, filter: Option<&str>) {
-        super::with_shared(|sh| rebuild(sh, &self.list, &self.empty, filter));
+        if let Some(filter) = filter {
+            self.search.set_text(filter);
+        }
+        super::with_shared(|sh| {
+            rebuild(
+                sh,
+                &self.list,
+                &self.empty,
+                &self.scroll,
+                &self.clear_btn,
+                &self.status,
+                &self.rows,
+                self.search.text().as_str(),
+            )
+        });
     }
 }
 
-fn rebuild(shared: &Rc<Shared>, list: &ListBox, empty: &Label, filter: Option<&str>) {
-    while let Some(c) = list.first_child() {
-        list.remove(&c);
-    }
-    let f = filter.map(|s| s.to_ascii_lowercase()).unwrap_or_default();
-    // collect filtered clones while holding borrow, then drop it before building rows
-    // to avoid double-borrow panic in clip_row -> blob_size
-    let filtered: Vec<crate::services::ClipEntry> = {
+#[allow(clippy::too_many_arguments)]
+fn rebuild(
+    shared: &Rc<Shared>,
+    list: &ListBox,
+    empty: &gtk4::Box,
+    scroll: &gtk4::ScrolledWindow,
+    clear_btn: &Button,
+    status: &Label,
+    rows: &RowCache,
+    filter: &str,
+) {
+    let query = filter.trim().to_lowercase();
+    let (filtered, total, clearable) = {
         let store = shared.clips.borrow();
-        store
-            .entries
-            .iter()
-            .filter(|e| f.is_empty() || e.preview.to_ascii_lowercase().contains(&f))
-            .take(200)
-            .cloned()
-            .collect()
+        (
+            store
+                .entries
+                .iter()
+                .filter(|e| query.is_empty() || e.preview.to_lowercase().contains(&query))
+                .take(200)
+                .cloned()
+                .collect::<Vec<_>>(),
+            store.entries.len(),
+            store.entries.iter().any(|e| !e.pinned),
+        )
     };
-    for e in filtered.iter() {
-        let row = clip_row(shared, e);
-        list.append(&row);
+    let mut cache = rows.borrow_mut();
+    // Reuse existing rows so clipboard updates preserve focus, hover and menus.
+    for (index, entry) in filtered.iter().enumerate() {
+        if cache
+            .get(&entry.id)
+            .is_some_and(|(pin, _)| *pin != entry.pinned)
+        {
+            if let Some((_, old)) = cache.remove(&entry.id) {
+                if old.parent().is_some() {
+                    list.remove(&old);
+                }
+            }
+        }
+        let (_, row) = cache
+            .entry(entry.id.clone())
+            .or_insert_with(|| (entry.pinned, clip_row(shared, entry)));
+        if let Some(time) = row
+            .child()
+            .and_then(|child| child.last_child())
+            .and_then(|child| child.downcast::<Label>().ok())
+        {
+            if time.text() != "Copied" {
+                super::set_label_text(&time, &ago(entry.at));
+            }
+        }
+        if list.row_at_index(index as i32).as_ref() != Some(row) {
+            if row.parent().is_some() {
+                list.remove(row);
+            }
+            list.insert(row, index as i32);
+        }
     }
-    let is_empty = filtered.is_empty();
-    empty.set_visible(is_empty);
-    list.set_visible(!is_empty);
+    while let Some(row) = list.row_at_index(filtered.len() as i32) {
+        list.remove(&row);
+    }
+    let present: std::collections::HashSet<String> = shared
+        .clips
+        .borrow()
+        .entries
+        .iter()
+        .map(|e| e.id.clone())
+        .collect();
+    cache.retain(|id, _| present.contains(id));
+    if cache.len() > 400 {
+        cache.retain(|id, _| filtered.iter().any(|e| &e.id == id));
+    }
+    empty.set_visible(filtered.is_empty());
+    scroll.set_visible(!filtered.is_empty());
+    clear_btn.set_sensitive(clearable);
+    if let Some(title) = empty
+        .first_child()
+        .and_then(|c| c.next_sibling())
+        .and_then(|c| c.downcast::<Label>().ok())
+    {
+        title.set_text(if query.is_empty() {
+            "Ready when you copy"
+        } else {
+            "No matching clips"
+        });
+    }
+    if let Some(detail) = empty.last_child().and_then(|c| c.downcast::<Label>().ok()) {
+        detail.set_text(if query.is_empty() {
+            "Copy text or an image in any app. Your recent clips will be waiting here."
+        } else {
+            "Try a different word or clear your search to see everything."
+        });
+    }
+    status.set_text(&format!(
+        "{} of {total} clips · Enter to copy · Right-click for more",
+        filtered.len()
+    ));
 }
 
 fn ago(ts: u64) -> String {
@@ -147,27 +288,58 @@ fn clip_row(shared: &Rc<Shared>, e: &crate::services::ClipEntry) -> ListBoxRow {
     h.append(&when);
     row.set_child(Some(&h));
 
-    let click = GestureClick::new();
-    click.set_button(1);
+    super::describe(&row, &format!("Copy {}", preview_txt));
+    row.set_focusable(true);
+    row.set_cursor_from_name(Some("pointer"));
     {
-        let e2 = e.clone();
-        let sh2 = shared.clone();
-        click.connect_released(move |_g, n, _x, _y| {
-            if n == 1 {
-                copy_entry_to_clipboard(&e2, &sh2.clips.borrow());
-            }
+        let entry = e.clone();
+        let sh = shared.clone();
+        let when = when.clone();
+        row.connect_activate(move |_| {
+            copy_entry_to_clipboard(&entry, &sh.clips.borrow());
+            when.set_text("Copied");
+            when.add_css_class("na-feedback");
+            let when = when.downgrade();
+            let at = entry.at;
+            gtk4::glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+                if let Some(when) = when.upgrade() {
+                    when.set_text(&ago(at));
+                    when.remove_css_class("na-feedback");
+                }
+            });
         });
     }
-    row.add_controller(click);
+    {
+        let key = gtk4::EventControllerKey::new();
+        let entry = e.clone();
+        let sh = shared.clone();
+        let weak_row = row.downgrade();
+        key.connect_key_pressed(move |_, key, _, mods| {
+            if key == gtk4::gdk::Key::Menu
+                || (key == gtk4::gdk::Key::F10
+                    && mods.contains(gtk4::gdk::ModifierType::SHIFT_MASK))
+            {
+                if let Some(row) = weak_row.upgrade() {
+                    show_menu(&sh, &entry, &row);
+                }
+                gtk4::glib::Propagation::Stop
+            } else {
+                gtk4::glib::Propagation::Proceed
+            }
+        });
+        row.add_controller(key);
+    }
 
     let right = GestureClick::new();
     right.set_button(3);
     {
         let e2 = e.clone();
         let sh2 = shared.clone();
-        let row2 = row.clone();
+        let row2 = row.downgrade();
         right.connect_released(move |_g, _n, _x, _y| {
-            show_menu(&sh2, &e2, &row2);
+            if let Some(row) = row2.upgrade() {
+                show_menu(&sh2, &e2, &row);
+            }
         });
     }
     row.add_controller(right);
@@ -181,20 +353,8 @@ fn blob_size(shared: &Rc<Shared>, e: &crate::services::ClipEntry) -> usize {
 }
 
 fn show_menu(shared: &Rc<Shared>, e: &crate::services::ClipEntry, parent: &ListBoxRow) {
-    let pop = gtk4::Popover::new();
-    pop.add_css_class("na-pop");
-    let menu = super::vbox(4);
-    menu.set_margin_top(6);
-    menu.set_margin_bottom(6);
-    menu.set_margin_start(8);
-    menu.set_margin_end(8);
-
-    let mk = |txt: &str| -> Button {
-        let b = Button::with_label(txt);
-        b.set_has_frame(false);
-        b.set_halign(gtk4::Align::Fill);
-        b
-    };
+    let (pop, menu) = super::context_menu();
+    let mk = super::menu_button;
 
     let b_copy = mk("Copy");
     {
@@ -215,8 +375,8 @@ fn show_menu(shared: &Rc<Shared>, e: &crate::services::ClipEntry, parent: &ListB
         let pop2 = pop.clone();
         b_pin.connect_clicked(move |_| {
             sh.clips.borrow_mut().toggle_pin(&e2.id);
-            crate::app::refresh_clips();
             pop2.popdown();
+            crate::app::refresh_clips();
         });
     }
     menu.append(&b_pin);
@@ -228,8 +388,8 @@ fn show_menu(shared: &Rc<Shared>, e: &crate::services::ClipEntry, parent: &ListB
         let pop2 = pop.clone();
         b_rm.connect_clicked(move |_| {
             sh.clips.borrow_mut().remove(&e2.id);
-            crate::app::refresh_clips();
             pop2.popdown();
+            crate::app::refresh_clips();
         });
     }
     menu.append(&b_rm);

@@ -11,6 +11,11 @@ use std::sync::mpsc::Receiver;
 
 pub struct App {
     pub shared: Rc<Shared>,
+    gtk_app: gtk4::Application,
+    monitors: RefCell<Vec<gtk4::gdk::Monitor>>,
+    active_monitor: std::cell::Cell<usize>,
+    calendar_loading: std::cell::Cell<bool>,
+    hyprland: RefCell<Option<services::hyprland::HyprlandHandle>>,
     pills: RefCell<Vec<PillUi>>,
     panels: RefCell<Vec<PanelUi>>,
     huds: RefCell<hud::HudManager>,
@@ -25,12 +30,40 @@ pub fn with_app<R>(f: impl FnOnce(&Rc<App>) -> R) -> Option<R> {
     APP.with(|a| a.borrow().as_ref().map(f))
 }
 
+/// Choose the display under direct interaction. Exactly one shelf opens at a time.
+pub fn activate_monitor(monitor: Option<&gtk4::gdk::Monitor>) {
+    with_app(|app| {
+        let Some(index) = app
+            .monitors
+            .borrow()
+            .iter()
+            .position(|m| Some(m) == monitor)
+        else {
+            return;
+        };
+        if app.active_monitor.replace(index) != index {
+            for panel in app.panels.borrow().iter() {
+                panel.collapse_now();
+            }
+            app.shared.expanded.set(false);
+            for pill in app.pills.borrow().iter() {
+                pill.win.set_visible(!app.shared.fullscreen_hide.get());
+            }
+        }
+    });
+}
+
+fn with_active_panel(app: &App, f: impl FnOnce(&PanelUi)) {
+    let panels = app.panels.borrow();
+    if let Some(panel) = panels.get(app.active_monitor.get()) {
+        f(panel);
+    }
+}
+
 /// Public helpers used from ui modules (they run on the GTK thread).
 pub fn request_expand_all() {
     with_app(|app| {
-        for p in app.panels.borrow().iter() {
-            p.expand();
-        }
+        with_active_panel(app, |p| p.expand());
     });
 }
 
@@ -42,29 +75,35 @@ pub fn request_collapse_all() {
     });
 }
 
+pub fn request_collapse_all_now() {
+    with_app(|app| {
+        for panel in app.panels.borrow().iter() {
+            panel.collapse_now();
+        }
+        app.shared.expanded.set(false);
+        show_pills(true);
+    });
+}
+
 /// User interacted with a panel (tab click) — keep it open.
 pub fn poke_panels() {
     with_app(|app| {
-        for p in app.panels.borrow().iter() {
-            p.poke_collapse_timer();
-        }
+        with_active_panel(app, |p| p.poke_collapse_timer());
     });
 }
 
 pub fn surface_pointer_enter() {
     with_app(|app| {
-        for p in app.panels.borrow().iter() {
-            p.note_pointer(true);
-        }
+        with_active_panel(app, |p| p.note_pointer(true));
     });
 }
 
 pub fn surface_pointer_leave() {
     with_app(|app| {
-        for p in app.panels.borrow().iter() {
+        with_active_panel(app, |p| {
             p.note_pointer(false);
             p.schedule_collapse_if_unhovered();
-        }
+        });
     });
 }
 
@@ -78,11 +117,11 @@ pub fn drop_hover(on: bool) {
         if on {
             IGNORE_DROP_LEAVE.with(|c| c.set(false));
             if !app.shared.fullscreen_hide.get() {
-                for p in app.panels.borrow().iter() {
+                with_active_panel(app, |p| {
                     p.expand();
                     p.note_pointer(true);
                     p.set_drop_veil(true);
-                }
+                });
             }
         } else if IGNORE_DROP_LEAVE.with(|c| c.replace(false)) {
             for p in app.panels.borrow().iter() {
@@ -104,12 +143,14 @@ pub fn drop_commit(value: &gtk4::glib::Value) {
         IGNORE_DROP_LEAVE.with(|c| c.set(true));
         crate::ui::panel::handle_dropped_value(&app.shared, value);
         app.shared.tab.set(crate::ui::Tab::Inbox);
-        for p in app.panels.borrow().iter() {
-            p.expand();
+        for (index, p) in app.panels.borrow().iter().enumerate() {
             p.show_tab(crate::ui::Tab::Inbox);
             p.shelf_reload();
             p.set_drop_veil(false);
-            p.note_pointer(true);
+            if index == app.active_monitor.get() {
+                p.expand();
+                p.note_pointer(true);
+            }
         }
         for p in app.pills.borrow().iter() {
             p.tick();
@@ -187,12 +228,14 @@ pub fn notify_ui(summary: &str, body: &str) {
         if let Some(tx) = app.shared.ui_tx.borrow().as_ref() {
             tx.send(Event::Notify(Banner {
                 id: u32::MAX - 1,
+                generation: crate::services::next_banner_generation(),
                 app_name: "naarchy".into(),
                 icon: String::new(),
                 summary: summary.into(),
                 body: body.into(),
                 actions: vec![],
                 urgency: 1,
+                timeout_ms: Some(6000),
             }));
         }
     });
@@ -203,8 +246,8 @@ pub fn show_pills(on: bool) {
         if app.shared.fullscreen_hide.get() {
             return;
         }
-        for p in app.pills.borrow().iter() {
-            p.win.set_visible(on);
+        for (index, p) in app.pills.borrow().iter().enumerate() {
+            p.win.set_visible(on || index != app.active_monitor.get());
         }
     });
 }
@@ -216,14 +259,11 @@ pub fn pump_once() {
     let mut verbs = Vec::new();
     PUMP.with(|slot| {
         if let Some((erx, vrx)) = slot.borrow_mut().as_mut() {
-            while let Ok(ev) = erx.try_recv() {
-                events.push(ev);
-            }
-            while let Ok(v) = vrx.try_recv() {
-                verbs.push(v);
-            }
+            events.extend(erx.try_iter().take(128));
+            verbs.extend(vrx.try_iter().take(64));
         }
     });
+    let saturated = events.len() == 128 || verbs.len() == 64;
     with_app(|app| {
         for ev in events {
             handle_event(app, ev);
@@ -232,6 +272,9 @@ pub fn pump_once() {
             handle_verb(app, v);
         }
     });
+    if saturated {
+        services::wake_ui();
+    }
 }
 
 pub fn run(
@@ -240,18 +283,19 @@ pub fn run(
     events_rx: Receiver<Event>,
     verb_rx: Receiver<Verb>,
     event_tx: services::EventTx,
-    media_cmd: Option<tokio::sync::mpsc::UnboundedSender<services::mpris::MediaCmd>>,
-    notif_cmd: Option<tokio::sync::mpsc::UnboundedSender<services::notifd::NotifCmd>>,
 ) {
     let shared = Shared::new(cfg);
     crate::ui::SHARED.with(|s| *s.borrow_mut() = Some(shared.clone()));
     shared.restyle();
     *shared.ui_tx.borrow_mut() = Some(event_tx.clone());
-    *shared.media_cmd.borrow_mut() = media_cmd;
-    *shared.notif_cmd.borrow_mut() = notif_cmd;
 
     let a = Rc::new(App {
         shared: shared.clone(),
+        gtk_app: app.clone(),
+        monitors: RefCell::new(Vec::new()),
+        active_monitor: std::cell::Cell::new(0),
+        calendar_loading: std::cell::Cell::new(false),
+        hyprland: RefCell::new(None),
         pills: RefCell::new(Vec::new()),
         panels: RefCell::new(Vec::new()),
         huds: RefCell::new(hud::HudManager::new(app)),
@@ -263,9 +307,7 @@ pub fn run(
         *shared.expand_all_cb.borrow_mut() = Some(Box::new(move || {
             if let Some(a) = a2.upgrade() {
                 if !a.shared.fullscreen_hide.get() {
-                    for p in a.panels.borrow().iter() {
-                        p.expand();
-                    }
+                    with_active_panel(&a, |p| p.expand());
                 }
             }
         }));
@@ -274,14 +316,19 @@ pub fn run(
     APP.with(|slot| *slot.borrow_mut() = Some(a.clone()));
     PUMP.with(|slot| *slot.borrow_mut() = Some((events_rx, verb_rx)));
     services::install_wake(glib::MainContext::default());
-    pump_once();
 
     build_surfaces(&a, app);
+    restart_hyprland(&a);
+    pump_once();
 
-    glib::timeout_add_local(std::time::Duration::from_millis(400), || {
-        pump_once();
-        glib::ControlFlow::Continue
-    });
+    // GDK is authoritative for display additions/removals, including non-Hyprland sessions.
+    if let Some(display) = gtk4::gdk::Display::default() {
+        display.monitors().connect_items_changed(|_, _, _, _| {
+            glib::idle_add_local_once(|| {
+                with_app(|app| sync_surfaces(app, false));
+            });
+        });
+    }
 
     // One-second tick: clock, timer fire, live activities
     {
@@ -325,50 +372,114 @@ fn tick_timer(app: &Rc<App>) {
     }
 }
 
-fn build_surfaces(app: &Rc<App>, gtk_app: &gtk4::Application) {
+fn restart_hyprland(app: &App) {
+    drop(app.hyprland.borrow_mut().take());
+    let cfg = app.shared.cfg.borrow();
+    let zone = services::hyprland::HoverZone {
+        band_px: cfg.behavior.hover_band_px as f64,
+        pill_w: if cfg.appearance.notch_mode {
+            cfg.appearance.pill_width_notch
+        } else {
+            cfg.appearance.pill_width_island
+        }
+        .max(crate::ui::liquid::NOTCH_W as i32) as f64,
+        pill_h: crate::ui::liquid::LIVE_H,
+        panel_w: cfg.appearance.panel_width as f64 * crate::ui::liquid::PANEL_WINDOW_SCALE,
+        panel_h: cfg.appearance.panel_height as f64,
+    };
+    if let Some(tx) = app.shared.ui_tx.borrow().clone() {
+        *app.hyprland.borrow_mut() = Some(services::hyprland::spawn(
+            tx,
+            zone,
+            cfg.behavior.hover_ms,
+            cfg.behavior.hover_open,
+        ));
+    }
+}
+
+fn build_surfaces(app: &Rc<App>, _gtk_app: &gtk4::Application) {
+    sync_surfaces(app, false);
+}
+
+fn sync_surfaces(app: &Rc<App>, force: bool) {
     use gtk4::gdk;
     let Some(display) = gdk::Display::default() else {
         return;
     };
-    let n = display.monitors().n_items();
-
-    let sel = app.shared.cfg.borrow().behavior.monitors.clone();
-
-    for i in 0..n {
-        let Some(m) = display.monitors().item(i).and_downcast::<gdk::Monitor>() else {
-            continue;
+    let list = display.monitors();
+    let selection = app.shared.cfg.borrow().behavior.monitors.clone();
+    let wanted: Vec<gdk::Monitor> = (0..list.n_items())
+        .filter_map(|i| {
+            let monitor = list.item(i).and_downcast::<gdk::Monitor>()?;
+            let name = monitor.connector().unwrap_or_default();
+            selection.wants(&name, i == 0).then_some(monitor)
+        })
+        .collect();
+    if !force && *app.monitors.borrow() == wanted {
+        return;
+    }
+    let was_expanded = app.shared.expanded.get();
+    let active = app.monitors.borrow().get(app.active_monitor.get()).cloned();
+    let old_monitors = std::mem::take(&mut *app.monitors.borrow_mut());
+    let old_panels = std::mem::take(&mut *app.panels.borrow_mut());
+    let old_pills = std::mem::take(&mut *app.pills.borrow_mut());
+    let mut old: Vec<_> = old_monitors
+        .into_iter()
+        .zip(old_pills.into_iter().zip(old_panels))
+        .map(Some)
+        .collect();
+    app.active_monitor.set(
+        wanted
+            .iter()
+            .position(|m| Some(m) == active.as_ref())
+            .unwrap_or(0),
+    );
+    *app.monitors.borrow_mut() = wanted.clone();
+    for monitor in wanted {
+        let existing = if force {
+            None
+        } else {
+            old.iter_mut()
+                .find(|entry| entry.as_ref().is_some_and(|(m, _)| m == &monitor))
+                .and_then(Option::take)
         };
-        let name = m.connector().unwrap_or_default();
-        // Empty connector always wants: never paint zero pills. Named
-        // `monitors = ["DP-1"]` lists still match when connector() is present.
-        if !name.is_empty() && !sel.wants(&name, i == 0) {
-            continue;
-        }
-
-        // Pill (collapsed state)
-        let on_click: crate::ui::Callback = Rc::new(RefCell::new(None));
-        let pill = PillUi::build(gtk_app, &app.shared, Some(&m), on_click.clone());
-
-        // Panel (expanded state)
-        let panel = PanelUi::build(gtk_app, &app.shared, Some(&m));
-
-        // Wire the click callback now that panels exist
-        let sh_click = app.shared.clone();
-        *on_click.borrow_mut() = Some(Box::new(move || {
-            if sh_click.expanded.get() {
-                request_collapse_all();
-            } else {
-                request_expand_all();
+        let (pill, panel) = if let Some((_, surfaces)) = existing {
+            surfaces
+        } else {
+            let on_click: crate::ui::Callback = Rc::new(RefCell::new(None));
+            let pill = PillUi::build(&app.gtk_app, &app.shared, Some(&monitor), on_click.clone());
+            let panel = PanelUi::build(&app.gtk_app, &app.shared, Some(&monitor));
+            *on_click.borrow_mut() = Some(Box::new(|| {
+                with_app(|app| {
+                    if app.shared.expanded.get() {
+                        request_collapse_all();
+                    } else {
+                        request_expand_all();
+                    }
+                });
+            }));
+            panel.show_tab(app.shared.tab.get());
+            if app.shared.fullscreen_hide.get() {
+                pill.win.set_visible(false);
             }
-        }));
-
+            (pill, panel)
+        };
         app.pills.borrow_mut().push(pill);
         app.panels.borrow_mut().push(panel);
+    }
+    // Existing outputs keep their GTK surfaces on hot-plug. Dispose only removed
+    // or explicitly replaced windows, after replacement surfaces are registered.
+    drop(old);
+
+    if was_expanded && !app.shared.fullscreen_hide.get() {
+        with_active_panel(app, |panel| panel.expand());
     }
 }
 
 fn handle_event(app: &Rc<App>, ev: Event) {
     match ev {
+        Event::MediaReady(sender) => *app.shared.media_cmd.borrow_mut() = Some(sender),
+        Event::NotificationsReady(sender) => *app.shared.notif_cmd.borrow_mut() = Some(sender),
         Event::Media(st) => {
             *app.shared.media.borrow_mut() = st;
             for p in app.pills.borrow().iter() {
@@ -384,11 +495,22 @@ fn handle_event(app: &Rc<App>, ev: Event) {
                 app.shared.restyle();
             }
         }
-        Event::HoverOpen => {
+        Event::HoverOpen(name) => {
+            if !app.shared.cfg.borrow().behavior.hover_open {
+                return;
+            }
+            let Some(monitor) = app
+                .monitors
+                .borrow()
+                .iter()
+                .find(|m| m.connector().as_deref() == Some(&name))
+                .cloned()
+            else {
+                return;
+            };
+            activate_monitor(Some(&monitor));
             if !app.shared.fullscreen_hide.get() {
-                for p in app.panels.borrow().iter() {
-                    p.expand();
-                }
+                with_active_panel(app, |p| p.expand());
             }
         }
         Event::HoverEnd => {
@@ -404,19 +526,23 @@ fn handle_event(app: &Rc<App>, ev: Event) {
         Event::Fullscreen(on) => {
             let hide = on && app.shared.cfg.borrow().behavior.hide_fullscreen;
             app.shared.fullscreen_hide.set(hide);
-            for p in app.pills.borrow().iter() {
-                p.win.set_visible(!hide);
+            for (index, p) in app.pills.borrow().iter().enumerate() {
+                p.win.set_visible(
+                    !hide && (!app.shared.expanded.get() || index != app.active_monitor.get()),
+                );
             }
-            if hide && app.shared.expanded.get() && !app.shared.pinned.get() {
-                for p in app.panels.borrow().iter() {
-                    p.collapse_now();
-                }
+            if hide && app.shared.expanded.get() {
+                request_collapse_all_now();
             }
         }
         Event::MonitorAdded(name) => {
-            log::info!("monitor added: {name} (restart naarchy to pick up)");
+            log::debug!("monitor added: {name}");
+            sync_surfaces(app, false);
         }
         Event::ClipNew(raw) => {
+            if !app.shared.cfg.borrow().features.clipboard {
+                return;
+            }
             let max_e = app.shared.cfg.borrow().clipboard.max_entries;
             let max_i = app.shared.cfg.borrow().clipboard.max_image_bytes;
             let added = app
@@ -428,39 +554,63 @@ fn handle_event(app: &Rc<App>, ev: Event) {
                 refresh_clips();
             }
         }
+        Event::CloseBanner { id, generation } => app.huds.borrow_mut().close_banner(id, generation),
         Event::Notify(b) => {
             app.huds.borrow_mut().show_banner(b, &app.shared);
         }
         Event::ConfigChanged(cfg) => {
+            if !cfg.behavior.hide_fullscreen {
+                app.shared.fullscreen_hide.set(false);
+            }
             *app.shared.cfg.borrow_mut() = *cfg;
             app.shared.restyle();
-            for p in app.panels.borrow().iter() {
-                p.redraw();
-            }
+            sync_surfaces(app, true);
+            restart_hyprland(app);
         }
         Event::CalendarReload => {
-            let events = services::calendar::today_from_cache();
-            *app.shared.cal_events.borrow_mut() = events.clone();
-            for p in app.panels.borrow().iter() {
-                p.cal_reload();
+            if app.calendar_loading.replace(true) {
+                return;
             }
-            // async travel-time enrichment for physical addresses (driving + leave time)
-            if events
-                .iter()
-                .any(|e| e.directions_url.is_some() && e.leave_label.is_none())
-            {
+            if let Some(tx) = app.shared.ui_tx.borrow().clone() {
+                std::thread::spawn(move || {
+                    tx.send(Event::CalendarLoaded(services::calendar::today_from_cache()));
+                });
+            }
+        }
+        Event::CalendarLoaded(events) => {
+            app.calendar_loading.set(false);
+            let enrich = app.shared.cfg.borrow().calendar.travel_times
+                && events
+                    .iter()
+                    .any(|e| e.directions_url.is_some() && e.leave_label.is_none());
+            *app.shared.cal_events.borrow_mut() = events.clone();
+            for panel in app.panels.borrow().iter() {
+                panel.cal_reload();
+            }
+            if enrich {
                 if let Some(tx) = app.shared.ui_tx.borrow().clone() {
-                    let evs = events.clone();
                     std::thread::spawn(move || {
-                        let enriched = services::calendar::enrich_with_travel(evs);
-                        if enriched.iter().any(|e| e.leave_label.is_some()) {
-                            tx.send(Event::CalendarEnriched(enriched));
-                        }
+                        tx.send(Event::CalendarEnriched(
+                            services::calendar::enrich_with_travel(events),
+                        ));
                     });
                 }
             }
         }
         Event::CalendarEnriched(enriched) => {
+            if !app.shared.cfg.borrow().calendar.travel_times {
+                return;
+            }
+            let current = app.shared.cal_events.borrow();
+            if current.len() != enriched.len()
+                || current
+                    .iter()
+                    .zip(&enriched)
+                    .any(|(a, b)| a.summary != b.summary || a.start_epoch != b.start_epoch)
+            {
+                return;
+            }
+            drop(current);
             *app.shared.cal_events.borrow_mut() = enriched;
             for p in app.panels.borrow().iter() {
                 p.cal_reload();
@@ -477,15 +627,11 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
                     p.collapse();
                 }
             } else {
-                for p in app.panels.borrow().iter() {
-                    p.expand();
-                }
+                with_active_panel(app, |p| p.expand());
             }
         }
         Verb::Expand => {
-            for p in app.panels.borrow().iter() {
-                p.expand();
-            }
+            with_active_panel(app, |p| p.expand());
         }
         Verb::Collapse => {
             for p in app.panels.borrow().iter() {
@@ -494,13 +640,27 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
         }
         Verb::Tab(t) => {
             if let Ok(tab) = t.parse::<TabStr>() {
+                let enabled = {
+                    let cfg = app.shared.cfg.borrow();
+                    match tab.0 {
+                        crate::ui::Tab::Inbox => cfg.features.shelf,
+                        crate::ui::Tab::Clipboard => cfg.features.clipboard,
+                        crate::ui::Tab::Calendar => cfg.features.calendar,
+                        _ => true,
+                    }
+                };
+                if !enabled {
+                    notify_ui(
+                        "Feature is turned off",
+                        "Enable it in your Naarchy configuration and restart.",
+                    );
+                    return;
+                }
                 app.shared.tab.set(tab.0);
                 for p in app.panels.borrow().iter() {
                     p.show_tab(tab.0);
-                    if !app.shared.expanded.get() {
-                        p.expand();
-                    }
                 }
+                with_active_panel(app, |p| p.expand());
             }
         }
         Verb::Hud {
@@ -513,13 +673,16 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
             app.huds.borrow_mut().show(&kind, value, step, icon, label);
         }
         Verb::ShelfAdd(paths) => {
-            for p in paths {
-                if p.starts_with("http") {
-                    app.shared.shelf.borrow_mut().add_text(&p);
-                } else {
-                    app.shared.shelf.borrow_mut().add_file(&p);
-                }
+            if !app.shared.cfg.borrow().features.shelf {
+                return;
             }
+            let (links, files): (Vec<_>, Vec<_>) = paths
+                .into_iter()
+                .partition(|p| p.starts_with("https://") || p.starts_with("http://"));
+            let mut shelf = app.shared.shelf.borrow_mut();
+            shelf.add_files(&files);
+            shelf.add_texts(&links);
+            drop(shelf);
             refresh_after_shelf_change();
         }
         Verb::ShelfClear => {
@@ -538,9 +701,10 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
             }
         }
         Verb::Timer(secs) => {
-            for p in app.panels.borrow().iter() {
-                p.timer_start(secs);
+            if !app.shared.cfg.borrow().features.timer {
+                return;
             }
+            crate::ui::timer::start_timer(&app.shared, secs);
         }
         Verb::TimerStop => {
             dismiss_timer();
@@ -549,18 +713,21 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
             app.huds.borrow_mut().show_banner(
                 Banner {
                     id: u32::MAX - 1,
+                    generation: crate::services::next_banner_generation(),
                     app_name: "naarchy".into(),
                     icon: String::new(),
                     summary,
                     body,
                     actions: vec![],
                     urgency: 1,
+                    timeout_ms: Some(6000),
                 },
                 &app.shared,
             );
         }
         Verb::Quit => {
-            std::process::exit(0);
+            crate::chime::alarm_stop();
+            app.gtk_app.quit();
         }
     }
 }

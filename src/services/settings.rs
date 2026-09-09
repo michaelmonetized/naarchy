@@ -23,15 +23,20 @@ pub async fn run(tx: EventTx) -> zbus::Result<()> {
     let settings = SettingsProxy::new(&conn).await?;
 
     async fn scheme_dark(s: &SettingsProxy<'_>) -> bool {
-        s.read_one("org.freedesktop.appearance", "color-scheme")
-            .await
-            .map(|v| value_is_dark(&v))
-            .unwrap_or(true)
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            s.read_one("org.freedesktop.appearance", "color-scheme"),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|v| value_is_dark(&v))
+        .unwrap_or(true)
     }
 
+    let mut stream = settings.receive_setting_changed().await?;
     tx.send(Event::SchemeDark(scheme_dark(&settings).await));
 
-    let mut stream = settings.receive_setting_changed().await?;
     while let Some(sig) = stream.next().await {
         if let Ok(args) = sig.args() {
             let ns = args.namespace().to_string();

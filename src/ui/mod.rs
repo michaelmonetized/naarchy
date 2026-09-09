@@ -8,6 +8,7 @@ pub mod media;
 pub mod motion;
 pub mod panel;
 pub mod pill;
+pub mod preferences;
 pub mod shelfview;
 pub mod timer;
 
@@ -64,7 +65,7 @@ impl Tab {
         match self {
             Tab::Home => "Home",
             Tab::Inbox => "Inbox",
-            Tab::Clipboard => "Clip",
+            Tab::Clipboard => "Clipboard",
             Tab::Widgets => "Widgets",
             Tab::Calendar => "Calendar",
         }
@@ -198,7 +199,11 @@ impl Shared {
             let cfg = self.cfg.borrow();
             let pal = crate::theme::resolve(&cfg, self.dark.get());
             *self.cached_palette.borrow_mut() = pal;
-            crate::theme::build_css(&cfg, self.dark.get())
+            let mut css = crate::theme::build_css(&cfg, self.dark.get());
+            if cfg.appearance.reduce_motion {
+                css.push_str("\n* { transition-duration: 0ms; animation: none; }\n");
+            }
+            css
         };
         thread_local! {
             static CSS: RefCell<Option<gtk4::CssProvider>> = const { RefCell::new(None) };
@@ -260,7 +265,74 @@ pub(crate) fn glyph_btn(classes: &[&str], glyph: &str) -> gtk4::Button {
     b.set_has_frame(false);
     b.set_css_classes(classes);
     b.set_child(Some(&label(&["na-glyph"], glyph)));
+    b.set_cursor_from_name(Some("pointer"));
     b
+}
+
+/// Give icon controls a spoken name as well as a pointer hint.
+pub(crate) fn describe(widget: &impl IsA<gtk4::Widget>, text: &str) {
+    widget.set_tooltip_text(Some(text));
+    widget
+        .as_ref()
+        .update_property(&[gtk4::accessible::Property::Label(text)]);
+}
+
+pub(crate) fn page_heading(title: &str, subtitle: &str) -> gtk4::Box {
+    let head = vbox(4);
+    head.add_css_class("na-page-head");
+    let title = label(&["na-page-title"], title);
+    title.set_xalign(0.0);
+    let subtitle = label(&["na-page-subtitle"], subtitle);
+    subtitle.set_xalign(0.0);
+    subtitle.set_wrap(true);
+    head.append(&title);
+    head.append(&subtitle);
+    head
+}
+
+pub(crate) fn empty_state(icon: &str, title: &str, detail: &str) -> gtk4::Box {
+    let state = vbox(8);
+    state.add_css_class("na-empty-state");
+    state.set_vexpand(true);
+    state.set_valign(gtk4::Align::Center);
+    let glyph = label(&["na-empty-icon"], icon);
+    let title = label(&["na-empty-title"], title);
+    let detail = label(&["na-empty-detail"], detail);
+    detail.set_wrap(true);
+    detail.set_justify(gtk4::Justification::Center);
+    detail.set_max_width_chars(44);
+    state.append(&glyph);
+    state.append(&title);
+    state.append(&detail);
+    state
+}
+
+/// Popovers must be unparented after closing or every context click retains a
+/// widget tree and its callbacks until the row is destroyed.
+pub(crate) fn context_menu() -> (gtk4::Popover, gtk4::Box) {
+    let pop = gtk4::Popover::new();
+    pop.add_css_class("na-pop");
+    let menu = vbox(4);
+    pop.set_child(Some(&menu));
+    pop.connect_closed(|pop| {
+        pop.set_child(None::<&gtk4::Widget>);
+        pop.unparent();
+    });
+    (pop, menu)
+}
+
+pub(crate) fn menu_button(text: &str) -> gtk4::Button {
+    let button = gtk4::Button::with_label(text);
+    button.set_has_frame(false);
+    button.set_halign(gtk4::Align::Fill);
+    button
+}
+
+/// Avoid needless layout invalidations from the one-second UI clock.
+pub(crate) fn set_label_text(label: &gtk4::Label, text: &str) {
+    if label.text().as_str() != text {
+        label.set_text(text);
+    }
 }
 
 /// Map a gtk4::ApplicationWindow onto the layer-shell protocol, top-center overlay.
