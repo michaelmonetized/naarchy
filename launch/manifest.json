@@ -1,0 +1,94 @@
+{
+  "verifiedAt": "2026-10-05T12:31:33.969Z",
+  "nativeRenderer": {
+    "product": "Omadesign",
+    "version": "0.6.3",
+    "commit": "c4813ef9a9628274778047e880a3aff6ea98d199",
+    "frames": 120,
+    "fps": 30,
+    "duration": 4,
+    "width": 1024,
+    "height": 1024
+  },
+  "filmRenderer": {
+    "product": "Remotion",
+    "version": "4.0.481"
+  },
+  "files": [
+    {
+      "name": "naarchy-release-1080p.mp4",
+      "bytes": 3748800,
+      "sha256": "b0d68c0526447e31f26e389f5fd658fdaa2b1e322c2e7ef7f7288fc33113f3e0",
+      "codec_name": "h264",
+      "width": 1920,
+      "height": 1080,
+      "r_frame_rate": "30/1",
+      "duration": "38.000000",
+      "nb_frames": "1140",
+      "side_data_list": [
+        {}
+      ],
+      "decode": "pass"
+    },
+    {
+      "name": "naarchy-release-square.mp4",
+      "bytes": 3450487,
+      "sha256": "5c72114e456870c9604aa21c9dedf5f5311462e14e37990134e17c13a856f2da",
+      "codec_name": "h264",
+      "width": 1080,
+      "height": 1080,
+      "r_frame_rate": "30/1",
+      "duration": "38.000000",
+      "nb_frames": "1140",
+      "side_data_list": [
+        {}
+      ],
+      "decode": "pass"
+    },
+    {
+      "name": "naarchy-release-vertical.mp4",
+      "bytes": 3745037,
+      "sha256": "2aebca2984d5b0caebb57638e03ecfb3d3b0186448dfe6a93cfcf28d752aa108",
+      "codec_name": "h264",
+      "width": 1080,
+      "height": 1920,
+      "r_frame_rate": "30/1",
+      "duration": "38.000000",
+      "nb_frames": "1140",
+      "side_data_list": [
+        {}
+      ],
+      "decode": "pass"
+    },
+    {
+      "name": "made-in-omadesign.mp4",
+      "bytes": 1554642,
+      "sha256": "8f4855e47aaf9684830f249c3aa982cb429fd7d1f1ec5844595b4f8dfd474327",
+      "codec_name": "h264",
+      "width": 1920,
+      "height": 1080,
+      "r_frame_rate": "30/1",
+      "duration": "24.000000",
+      "nb_frames": "720",
+      "side_data_list": [
+        {}
+      ],
+      "decode": "pass"
+    },
+    {
+      "name": "made-in-omadesign-vertical.mp4",
+      "bytes": 1458930,
+      "sha256": "b06f08f51c8918486bece841c08160900f00baaaf4c5025818aa15a4c2506ed2",
+      "codec_name": "h264",
+      "width": 1080,
+      "height": 1920,
+      "r_frame_rate": "30/1",
+      "duration": "24.000000",
+      "nb_frames": "720",
+      "side_data_list": [
+        {}
+      ],
+      "decode": "pass"
+    }
+  ]
+}

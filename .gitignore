@@ -4,3 +4,10 @@
 docs/screenshots/00-fullscreen-*.png
 docs/screenshots/01-pill.png
 docs/screenshots/01-pill-collapsed.png
+
+# Launch build outputs and original full-window captures
+/launch/artifacts/
+/launch/video/node_modules/
+/launch/video/.remotion/
+/launch/video/out/
+/launch/video/public/
