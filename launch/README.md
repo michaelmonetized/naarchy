@@ -8,6 +8,7 @@ Product Hunt is scheduled for **October 6 at 12:01 AM PDT** (3:01 AM EDT / 07:01
 - Product Hunt: https://www.producthunt.com/products/naarchy?launch=naarchy
 - Manage launch: https://www.producthunt.com/products/naarchy/naarchy/prelaunch
 - Software: https://github.com/michaelmonetized/naarchy/releases/tag/v0.4.0
+- Download all five films and editable source: https://github.com/michaelmonetized/naarchy/releases/download/v0.4.0/naarchy-launch-package.zip
 
 ## Files
 
@@ -42,6 +43,8 @@ bun run typecheck
 cd ../..
 bash launch/scripts/render.sh
 ```
+
+The render script runs the media verifier after all five exports and refreshes `launch/manifest.json` with the new sizes, frame counts, durations, and SHA-256 hashes.
 
 `REMOTION_BROWSER` can override `/usr/bin/chromium`. Open `launch/brand/naarchy-logo.oma` or `launch/motion/naarchy-reveal.oma` in Omadesign to edit the artwork. Run `bun run studio` inside `launch/video` to edit the film.
 
