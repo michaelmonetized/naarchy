@@ -1,0 +1,498 @@
+import React from "react";
+import {
+	AbsoluteFill,
+	Composition,
+	Img,
+	OffthreadVideo,
+	Sequence,
+	registerRoot,
+	spring,
+	staticFile,
+	useCurrentFrame,
+	useVideoConfig,
+} from "remotion";
+const blue = "#3035ff",
+	lime = "#d5fe6b",
+	cream = "#f7f6ee",
+	ink = "#10110f";
+const features = [
+	{
+		image: "home",
+		title: "Your day. Within reach.",
+		copy: "Music. Focus. Your next move.",
+		color: lime,
+	},
+	{
+		image: "inbox",
+		title: "Put it down. Pick it up.",
+		copy: "Files, images, and text. Ready when you are.",
+		color: "#bfc2ff",
+	},
+	{
+		image: "clipboard",
+		title: "Copied. Never lost.",
+		copy: "Your clipboard history. On your machine.",
+		color: "#ffb8d2",
+	},
+	{
+		image: "calendar",
+		title: "Make room for what’s next.",
+		copy: "Your calendar. One little island.",
+		color: "#ffe797",
+	},
+];
+function BrandMotion() {
+	const f = useCurrentFrame();
+	return (
+		<Img
+			src={staticFile(
+				`motion/${String(Math.min(119, f)).padStart(4, "0")}.png`,
+			)}
+			style={{ width: 280, height: 280, objectFit: "contain" }}
+		/>
+	);
+}
+function Title({ end = false }: { end?: boolean }) {
+	const f = useCurrentFrame(),
+		{ fps, width, height } = useVideoConfig();
+	const p = spring({ frame: f - 8, fps, config: { damping: 22 } }),
+		size = width === 1200 ? 68 : width < height ? 100 : 95;
+	return (
+		<AbsoluteFill
+			style={{
+				background: blue,
+				color: cream,
+				alignItems: "center",
+				justifyContent: "center",
+				textAlign: "center",
+				fontFamily: "Arial",
+				padding: 50,
+			}}
+		>
+			<div
+				style={{
+					position: "absolute",
+					width: 1700,
+					height: 1700,
+					border: "1px solid #ffffff24",
+					borderRadius: "50%",
+					left: -1200,
+					top: -220,
+				}}
+			/>
+			<div
+				style={{
+					position: "absolute",
+					width: 1700,
+					height: 1700,
+					border: "1px solid #ffffff24",
+					borderRadius: "50%",
+					right: -1200,
+					top: -220,
+				}}
+			/>
+			{end ? (
+				<Img
+					src={staticFile("logo.svg")}
+					style={{ width: width === 1200 ? 100 : 165, marginBottom: 20 }}
+				/>
+			) : (
+				<BrandMotion />
+			)}
+			<div style={{ transform: `translateY(${(1 - p) * 45}px)`, opacity: p }}>
+				<div
+					style={{
+						fontSize: width === 1200 ? 17 : 26,
+						letterSpacing: 5,
+						marginBottom: 22,
+					}}
+				>
+					NAARCHY · LINUX
+				</div>
+				<h1
+					style={{
+						fontSize: size,
+						lineHeight: 1.02,
+						letterSpacing: -5,
+						margin: "0 0 25px",
+					}}
+				>
+					A little space
+					<br />
+					<i style={{ fontFamily: "Georgia", fontWeight: 400, color: lime }}>
+						for everything.
+					</i>
+				</h1>
+				<div style={{ fontSize: width === 1200 ? 20 : 25, opacity: 0.8 }}>
+					{end
+						? "Free. Open source. Yours to keep."
+						: "Your desktop’s little island."}
+				</div>
+			</div>
+			{end && (
+				<div
+					style={{
+						fontSize: width === 1200 ? 18 : 24,
+						marginTop: 30,
+						background: lime,
+						color: ink,
+						padding: "16px 25px",
+						borderRadius: 12,
+					}}
+				>
+					michaelchurley.com/portfolio/naarchy
+				</div>
+			)}
+			<div
+				style={{
+					position: "absolute",
+					bottom: 25,
+					fontSize: 13,
+					letterSpacing: 2,
+				}}
+			>
+				NATIVE RUST + GTK4 · OMARCHY / HYPRLAND · MIT
+			</div>
+		</AbsoluteFill>
+	);
+}
+function Feature({
+	index = 0,
+	still = false,
+}: {
+	index?: number;
+	still?: boolean;
+}) {
+	const f = useCurrentFrame(),
+		{ fps, width, height } = useVideoConfig(),
+		item = features[index];
+	const portrait = height > width,
+		small = height === 760;
+	const p = still ? 1 : spring({ frame: f, fps, config: { damping: 24 } });
+	return (
+		<AbsoluteFill
+			style={{
+				background: item.color,
+				color: ink,
+				fontFamily: "Arial",
+				padding: small ? 50 : 70,
+				justifyContent: "center",
+			}}
+		>
+			<div
+				style={{
+					fontSize: small ? 15 : 18,
+					letterSpacing: 3,
+					marginBottom: 20,
+				}}
+			>
+				NAARCHY / 0{index + 1}
+			</div>
+			<h1
+				style={{
+					fontSize: small ? 61 : portrait ? 90 : 78,
+					lineHeight: 1.02,
+					letterSpacing: -4,
+					maxWidth: 1100,
+					margin: "0 0 22px",
+				}}
+			>
+				{item.title}
+			</h1>
+			<p style={{ fontSize: small ? 21 : 27, margin: "0 0 30px" }}>
+				{item.copy}
+			</p>
+			<div
+				style={{
+					alignSelf: "center",
+					width: portrait ? "100%" : "80%",
+					height: small ? 450 : portrait ? 770 : 570,
+					display: "flex",
+					justifyContent: "center",
+					alignItems: "center",
+					background: ink,
+					borderRadius: 28,
+					boxShadow: "0 25px 50px #10110f22",
+					transform: `translateY(${(1 - p) * 65}px) scale(${0.97 + 0.03 * p})`,
+					opacity: p,
+					padding: 25,
+				}}
+			>
+				<Img
+					src={staticFile(`${item.image}.png`)}
+					style={{ width: "100%", height: "100%", objectFit: "contain" }}
+				/>
+			</div>
+			<div
+				style={{ marginTop: 25, fontSize: small ? 12 : 16, letterSpacing: 1.5 }}
+			>
+				RELEASE CAPTURE · LOCAL CLIPBOARD + SHELF · NO TELEMETRY
+			</div>
+		</AbsoluteFill>
+	);
+}
+function Demo() {
+	const { width, height } = useVideoConfig();
+	return (
+		<AbsoluteFill
+			style={{
+				background: ink,
+				color: cream,
+				fontFamily: "Arial",
+				padding: 70,
+				justifyContent: "center",
+			}}
+		>
+			<div style={{ fontSize: 20, letterSpacing: 3, marginBottom: 25 }}>
+				ONE LITTLE ISLAND. YOUR EVERYDAY DESKTOP.
+			</div>
+			<h1
+				style={{
+					fontSize: width < height ? 88 : 78,
+					lineHeight: 1.03,
+					letterSpacing: -5,
+					margin: "0 0 35px",
+				}}
+			>
+				Click. Carry on.
+			</h1>
+			<div
+				style={{
+					height: height > width ? 780 : 650,
+					borderRadius: 26,
+					overflow: "hidden",
+					background: "#282a28",
+					position: "relative",
+				}}
+			>
+				<OffthreadVideo
+					src={staticFile("island-demo.mp4")}
+					muted
+					style={{
+						position: "absolute",
+						width: "170%",
+						maxWidth: "none",
+						left: "-35%",
+						top: 0,
+					}}
+				/>
+			</div>
+			<div style={{ fontSize: 18, marginTop: 25, opacity: 0.65 }}>
+				Real Naarchy recording on Hyprland.
+			</div>
+		</AbsoluteFill>
+	);
+}
+function Release() {
+	return (
+		<>
+			<Sequence from={0} durationInFrames={120}>
+				<Title />
+			</Sequence>
+			<Sequence from={120} durationInFrames={180}>
+				<Feature index={0} />
+			</Sequence>
+			<Sequence from={300} durationInFrames={210}>
+				<Demo />
+			</Sequence>
+			<Sequence from={510} durationInFrames={150}>
+				<Feature index={1} />
+			</Sequence>
+			<Sequence from={660} durationInFrames={150}>
+				<Feature index={2} />
+			</Sequence>
+			<Sequence from={810} durationInFrames={150}>
+				<Feature index={3} />
+			</Sequence>
+			<Sequence from={960} durationInFrames={180}>
+				<Title end />
+			</Sequence>
+		</>
+	);
+}
+function MakingEditor() {
+	const f = useCurrentFrame(),
+		{ width, height } = useVideoConfig();
+	return (
+		<AbsoluteFill
+			style={{
+				background: blue,
+				color: cream,
+				fontFamily: "Arial",
+				padding: 60,
+				justifyContent: "center",
+			}}
+		>
+			<div style={{ fontSize: 20, letterSpacing: 3, marginBottom: 24 }}>
+				OMADESIGN × NAARCHY
+			</div>
+			<h1
+				style={{
+					fontSize: width < height ? 85 : 75,
+					letterSpacing: -4,
+					lineHeight: 1.04,
+					margin: "0 0 35px",
+				}}
+			>
+				Built on Linux.
+				<br />
+				<i style={{ fontFamily: "Georgia", fontWeight: 400, color: lime }}>
+					Designed on Linux.
+				</i>
+			</h1>
+			<div
+				style={{
+					position: "relative",
+					height: height > width ? 720 : 660,
+					overflow: "hidden",
+					borderRadius: 20,
+					background: ink,
+				}}
+			>
+				<OffthreadVideo
+					src={staticFile("omadesign-process.mp4")}
+					playbackRate={0.8}
+					muted
+					style={{ width: "100%", height: "100%", objectFit: "contain" }}
+				/>
+			</div>
+			<div
+				style={{
+					display: "flex",
+					justifyContent: "space-between",
+					fontSize: 22,
+					marginTop: 28,
+				}}
+			>
+				<span>
+					{f < 300
+						? "Five native shapes. One identity."
+						: "Native vectors. Native motion."}
+				</span>
+				<span>omadesign.app</span>
+			</div>
+		</AbsoluteFill>
+	);
+}
+function MakingOutro() {
+	const f = useCurrentFrame();
+	return (
+		<AbsoluteFill
+			style={{
+				background: blue,
+				color: cream,
+				fontFamily: "Arial",
+				alignItems: "center",
+				justifyContent: "center",
+				textAlign: "center",
+				padding: 60,
+			}}
+		>
+			<div style={{ fontSize: 24, letterSpacing: 4, marginBottom: 25 }}>
+				OMADESIGN × NAARCHY
+			</div>
+			{f < 120 ? (
+				<BrandMotion />
+			) : (
+				<Img src={staticFile("logo.svg")} style={{ width: 280, height: 280 }} />
+			)}
+			<h1
+				style={{
+					fontSize: 78,
+					lineHeight: 1.05,
+					letterSpacing: -4,
+					margin: "28px 0",
+				}}
+			>
+				Five native shapes.
+				<br />
+				<i style={{ fontFamily: "Georgia", color: lime, fontWeight: 400 }}>
+					One little island.
+				</i>
+			</h1>
+			<div style={{ fontSize: 24, lineHeight: 1.8 }}>
+				omadesign.app
+				<br />
+				michaelchurley.com/portfolio/naarchy
+			</div>
+			<div style={{ fontSize: 16, marginTop: 30, opacity: 0.7 }}>
+				EDITABLE IDENTITY + NATIVE MOTION · MADE IN OMADESIGN
+			</div>
+		</AbsoluteFill>
+	);
+}
+function Making() {
+	return (
+		<>
+			<Sequence durationInFrames={480}>
+				<MakingEditor />
+			</Sequence>
+			<Sequence from={480} durationInFrames={240}>
+				<MakingOutro />
+			</Sequence>
+		</>
+	);
+}
+const Social = () => <Title end />;
+const Root = () => (
+	<>
+		<Composition
+			id="Release"
+			component={Release}
+			durationInFrames={1140}
+			fps={30}
+			width={1920}
+			height={1080}
+		/>
+		<Composition
+			id="ReleaseSquare"
+			component={Release}
+			durationInFrames={1140}
+			fps={30}
+			width={1080}
+			height={1080}
+		/>
+		<Composition
+			id="ReleaseVertical"
+			component={Release}
+			durationInFrames={1140}
+			fps={30}
+			width={1080}
+			height={1920}
+		/>
+		<Composition
+			id="MakingOf"
+			component={Making}
+			durationInFrames={720}
+			fps={30}
+			width={1920}
+			height={1080}
+		/>
+		<Composition
+			id="MakingOfVertical"
+			component={Making}
+			durationInFrames={720}
+			fps={30}
+			width={1080}
+			height={1920}
+		/>
+		<Composition
+			id="Gallery"
+			component={Feature}
+			durationInFrames={1}
+			fps={30}
+			width={1270}
+			height={760}
+			defaultProps={{ index: 0, still: true }}
+		/>
+		<Composition
+			id="Social"
+			component={Social}
+			durationInFrames={200}
+			fps={30}
+			width={1200}
+			height={630}
+		/>
+	</>
+);
+registerRoot(Root);
