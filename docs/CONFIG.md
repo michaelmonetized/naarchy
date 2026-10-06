@@ -167,7 +167,8 @@ If this private marker cannot be saved, Naarchy skips the welcome. Removing
 only the marker does not reset an existing installation.
 
 On **local October 31**, Halloween costumes occasionally add small fangs,
-cartoon red drips, or a hanging bat below the island. Each visit lasts 20–35
+cartoon drips, or an upside-down bat gripping the island with its feet. All
+three are solid black silhouettes. Each visit lasts 20–35
 seconds, followed by a random 2–4 minute quiet stretch. Consecutive visits use
 different motifs. A short entrance settles to static artwork; reduced motion
 shows the artwork immediately. The decoration has no keyboard or pointer input,

@@ -125,6 +125,8 @@ pub(super) fn draw(cr: &Context, costume: Costume, cx: f64, top: f64, gain: f64)
     let _ = cr.save();
     cr.translate(cx, top - 2.0);
     cr.scale(1.0, gain.max(0.001));
+    // Costumes extend the island's black silhouette, without colored details.
+    cr.set_source_rgb(0.0, 0.0, 0.0);
     match costume {
         Costume::Fangs => {
             for x in [-38.0, 38.0] {
@@ -133,11 +135,9 @@ pub(super) fn draw(cr: &Context, costume: Costume, cx: f64, top: f64, gain: f64)
                 cr.line_to(x + 1.0, 23.0);
                 cr.close_path();
             }
-            cr.set_source_rgb(0.95, 0.91, 0.8);
             let _ = cr.fill();
         }
         Costume::Drips => {
-            cr.set_source_rgb(0.7, 0.13, 0.21);
             for (x, length, radius) in [
                 (-49.0, 16.0, 3.5),
                 (-20.0, 28.0, 4.0),
@@ -150,28 +150,94 @@ pub(super) fn draw(cr: &Context, costume: Costume, cx: f64, top: f64, gain: f64)
             }
         }
         Costume::Bat => {
-            cr.set_source_rgb(0.63, 0.55, 0.79);
-            cr.set_line_width(1.5);
-            cr.move_to(0.0, 0.0);
-            cr.line_to(0.0, 12.0);
-            let _ = cr.stroke();
-            // Soft scalloped wings and a little upside-down face; no flashing.
-            cr.move_to(0.0, 22.0);
-            cr.curve_to(-12.0, 6.0, -30.0, 12.0, -36.0, 30.0);
-            cr.curve_to(-24.0, 21.0, -24.0, 38.0, -15.0, 32.0);
-            cr.curve_to(-9.0, 28.0, -8.0, 37.0, 0.0, 33.0);
-            cr.curve_to(8.0, 37.0, 9.0, 28.0, 15.0, 32.0);
-            cr.curve_to(24.0, 38.0, 24.0, 21.0, 36.0, 30.0);
-            cr.curve_to(30.0, 12.0, 12.0, 6.0, 0.0, 22.0);
+            // Two splayed feet grip the edge directly. Short paired legs lead
+            // into the hips; there is no central thread or suspension line.
+            for x in [-6.0, 6.0] {
+                cr.move_to(x - 5.0, -2.0);
+                cr.line_to(x + 4.0, -2.0);
+                cr.line_to(x + 5.0, 3.0);
+                cr.line_to(x + 2.0, 1.0);
+                cr.line_to(x + 1.8, 12.0);
+                cr.line_to(x - 1.8, 12.0);
+                cr.line_to(x - 2.0, 1.0);
+                cr.line_to(x - 5.0, 3.0);
+                cr.close_path();
+                let _ = cr.fill();
+            }
+            // Scalloped wings frame a body whose head and pointed ears are
+            // below its feet: the roosting bat is visibly upside down.
+            for direction in [-1.0, 1.0] {
+                let _ = cr.save();
+                cr.scale(direction, 1.0);
+                cr.move_to(5.0, 15.0);
+                cr.curve_to(11.0, 10.0, 22.0, 12.0, 28.0, 22.0);
+                cr.line_to(21.0, 20.0);
+                cr.curve_to(23.0, 25.0, 21.0, 31.0, 17.0, 34.0);
+                cr.line_to(13.0, 29.0);
+                cr.curve_to(11.0, 32.0, 8.0, 32.0, 6.0, 30.0);
+                cr.close_path();
+                let _ = cr.fill();
+                let _ = cr.restore();
+            }
+            cr.move_to(0.0, 8.0);
+            cr.curve_to(11.0, 8.0, 12.0, 23.0, 7.0, 32.0);
+            cr.line_to(-7.0, 32.0);
+            cr.curve_to(-12.0, 23.0, -11.0, 8.0, 0.0, 8.0);
             let _ = cr.fill();
-            cr.arc(0.0, 27.0, 7.0, 0.0, std::f64::consts::TAU);
+            cr.arc(0.0, 35.0, 7.0, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
-            for x in [-3.0, 3.0] {
-                cr.set_source_rgb(0.96, 0.86, 0.57);
-                cr.arc(x, 29.0, 1.2, 0.0, std::f64::consts::TAU);
+            for direction in [-1.0, 1.0] {
+                cr.move_to(direction * 6.0, 34.0);
+                cr.line_to(direction * 8.0, 43.0);
+                cr.line_to(direction, 40.0);
+                cr.close_path();
                 let _ = cr.fill();
             }
         }
     }
     let _ = cr.restore();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pixels(costume: Costume) -> Vec<u8> {
+        let mut surface =
+            gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, 160, 80).unwrap();
+        {
+            let cr = Context::new(&surface).unwrap();
+            draw(&cr, costume, 80.0, 20.0, 1.0);
+        }
+        surface.flush();
+        let pixels = surface.data().unwrap().to_vec();
+        pixels
+    }
+
+    #[test]
+    fn all_costumes_render_only_black_ink() {
+        for costume in [Costume::Fangs, Costume::Drips, Costume::Bat] {
+            let pixels = pixels(costume);
+            assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| p[..3] == [0, 0, 0]),
+                "colored pixel in {costume:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn upside_down_bat_has_two_edge_grips_and_a_head_below_them() {
+        let pixels = pixels(Costume::Bat);
+        let alpha = |x: usize, y: usize| pixels[(y * 160 + x) * 4 + 3];
+        // Separate feet touch the notch; its center has no hanging string.
+        assert!(alpha(74, 20) > 0 && alpha(86, 20) > 0);
+        assert_eq!(alpha(80, 20), 0);
+        assert!(alpha(80, 53) > 0, "head must be below feet/body");
+        assert!(alpha(73, 59) > 0 && alpha(87, 59) > 0, "ears point down");
+    }
 }
