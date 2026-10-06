@@ -84,6 +84,12 @@ and feature controls. Advanced settings are available in
 running. Restart after changing service feature flags or calendar feeds. Home
 widget choices are saved separately.
 
+A fresh first start on local October 10 gets a brief binary-confetti welcome.
+On October 31 the island occasionally wears fangs, cartoon drips, or a bat.
+Both respect Reduce motion; Halloween costumes can be disabled in Preferences.
+See [seasonal details](docs/CONFIG.md#seasonal-details) for timing and first-run
+behavior.
+
 Clipboard and shelf content stay on your machine. Their state and image files
 are saved with owner-only permissions. Clipboard history is **not encrypted**;
 anything you copy can enter history while capture is enabled. Disable the

@@ -1,5 +1,6 @@
 pub mod calendar;
 pub mod clipview;
+pub mod costume;
 pub mod drawer;
 pub mod home;
 pub mod hud;
@@ -11,6 +12,10 @@ pub mod pill;
 pub mod preferences;
 pub mod shelfview;
 pub mod timer;
+pub mod welcome;
+
+#[cfg(test)]
+mod seasonal_tests;
 
 /// Nerd Font glyphs used as UI chrome (not content). One family, one size
 /// scale — never mix emoji into the chrome.

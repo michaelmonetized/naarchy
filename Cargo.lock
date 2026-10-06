@@ -1118,6 +1118,8 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "ureq",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "wl-clipboard-rs",
  "zbus",
 ]

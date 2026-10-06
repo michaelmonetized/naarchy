@@ -32,6 +32,7 @@ panel_width = 680
 panel_height = 460
 opacity = 0.98
 reduce_motion = false    # skip spring animations
+halloween = true        # occasional island costumes on local October 31
 
 [behavior]
 hover_open = true
@@ -127,6 +128,7 @@ service. `naarchy notify` can still show a local banner with that setting off.
 ~/.config/naarchy/widgets.json          # Home widget set
 ~/.local/share/naarchy/shelf.json
 ~/.local/share/naarchy/clipboard.json
+~/.local/share/naarchy/first-run.json   # once-only local-calendar welcome decision
 ~/.local/share/naarchy/blobs/
 ~/.cache/naarchy/art/
 ~/.cache/naarchy/calendar/
@@ -147,3 +149,29 @@ not own those files. Removing a shelf entry never removes the original.
 
 A legacy `accent = "#7aa2f7"` with `omarchy = true` is treated as unset so the
 current Omarchy accent can take effect.
+
+## Seasonal details
+
+On a fresh daemon's first start on **local October 10**, binary confetti spreads
+across the selected displays, settles into lowercase terminal lettering reading
+`thanks for installing naarchy happy 10/10`, then fades. It lasts about six
+seconds. Dismiss ends it immediately. It accepts no keyboard focus and the
+drawing is click-through; only Dismiss accepts pointer input. Reduce motion
+(or disabling GTK animations) shows a static message for four seconds.
+
+The first-start decision is saved before showing the welcome, including starts
+on other dates. Relaunch, dismissal, and an interrupted animation do not replay
+it, even on a later October 10. Older installations with existing Naarchy
+configuration or data are treated as already run. CLI queries do not count.
+If this private marker cannot be saved, Naarchy skips the welcome. Removing
+only the marker does not reset an existing installation.
+
+On **local October 31**, Halloween costumes occasionally add small fangs,
+cartoon red drips, or a hanging bat below the island. Each visit lasts 20–35
+seconds, followed by a random 2–4 minute quiet stretch. Consecutive visits use
+different motifs. A short entrance settles to static artwork; reduced motion
+shows the artwork immediately. The decoration has no keyboard or pointer input,
+disappears while its island is hidden, and stops on date change or shutdown.
+Disable **Halloween costumes** in Preferences or set `appearance.halloween =
+false`; this takes effect without restarting. These costumes are independent
+of the first-run welcome and never show a full-screen celebration.

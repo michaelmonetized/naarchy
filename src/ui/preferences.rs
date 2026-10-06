@@ -142,6 +142,15 @@ pub fn show(app: &gtk4::Application) {
     switch(
         &form,
         &mut preferences,
+        "appearance",
+        "halloween",
+        "Halloween costumes",
+        "Occasional fangs, cartoon drips, and a bat on October 31.",
+        cfg.appearance.halloween,
+    );
+    switch(
+        &form,
+        &mut preferences,
         "clock",
         "show_in_pill",
         "Clock on the island",
