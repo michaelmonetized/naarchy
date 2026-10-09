@@ -19,8 +19,8 @@ state, clipboard content, system time, and the installed app untouched. Fresh
 native screenshots were inspected. These checks supplement physical Hyprland,
 scaling, and multi-monitor review; they do not establish those physical checks.
 
-The x86-64 test binary cross-compiled against Ubuntu 24.04's GTK dependencies
-using Rust 1.92.0. The temporary environment's QEMU crashed with an internal
+The optimized x86-64 binary and test binary cross-compiled against Ubuntu
+24.04's GTK dependencies using Rust 1.92.0. The temporary environment's QEMU crashed with an internal
 SIGBUS before any test started. This is not an x86-64 runtime pass. Successful
 native x86-64 validation, remote CI, checksum/archive review, and installation
 from the generated archives remain required before publication. Local build
