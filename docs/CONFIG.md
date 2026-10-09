@@ -162,7 +162,8 @@ drawing is click-through; only Dismiss accepts pointer input. Reduce motion
 The first-start decision is saved before showing the welcome, including starts
 on other dates. Relaunch, dismissal, and an interrupted animation do not replay
 it, even on a later October 10. Older installations with existing Naarchy
-configuration or data are treated as already run. CLI queries do not count.
+configuration (including saved `widgets.json`) or data are treated as already
+run. CLI queries do not count.
 If this private marker cannot be saved, Naarchy skips the welcome. Removing
 only the marker does not reset an existing installation.
 

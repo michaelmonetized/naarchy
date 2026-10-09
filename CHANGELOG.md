@@ -17,6 +17,9 @@
   Reduced motion shows static artwork immediately; decorations remain passive.
 - Added isolated native Wayland checks for seasonal rendering, input access,
   clipboard preservation, dismissal, persistence, and cleanup.
+- Saved widget settings also count as prior use after the main configuration
+  is removed. Desktop build checks and release packaging now run locally;
+  removed the GitHub-hosted desktop build workflows.
 
 ## 0.4.0
 

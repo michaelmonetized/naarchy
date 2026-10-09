@@ -18,6 +18,7 @@ impl FirstRun {
         let marker = data.join(MARKER);
         // An unreadable/corrupt marker still means this was already attempted.
         let marked = marker.try_exists()?;
+        let saved_widgets = config.with_file_name("widgets.json").try_exists()?;
         let existing_data = match std::fs::read_dir(data) {
             Ok(mut entries) => entries.next().transpose()?.is_some(),
             Err(e) if e.kind() == io::ErrorKind::NotFound => false,
@@ -26,7 +27,7 @@ impl FirstRun {
         Ok(Self {
             marker,
             date,
-            eligible: !marked && !config.try_exists()? && !existing_data,
+            eligible: !marked && !config.try_exists()? && !saved_widgets && !existing_data,
         })
     }
 
@@ -119,6 +120,19 @@ mod tests {
             }
             assert!(!s.inspect((2026, 10, 10)).consume().unwrap());
         }
+    }
+
+    #[test]
+    fn saved_widgets_count_as_prior_use_without_main_config_or_data() {
+        let s = Sandbox::new();
+        let widgets = s.0.join("widgets.json");
+        std::fs::write(&widgets, "{\"enabled\":[\"Clock\"]}").unwrap();
+        assert!(!s.inspect((2026, 10, 10)).consume().unwrap());
+        assert!(!s.inspect((2027, 10, 10)).consume().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(widgets).unwrap(),
+            "{\"enabled\":[\"Clock\"]}"
+        );
     }
 
     #[test]
