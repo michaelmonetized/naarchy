@@ -49,6 +49,13 @@ cargo install --path . --locked
 
 Rust **1.92 or newer** is required. Run inside your Wayland desktop session.
 
+Prebuilt ARM64 and x86-64 Linux packages are available from
+[GitHub Releases](https://github.com/michaelmonetized/naarchy/releases/latest).
+Install GTK 4.14+ and gtk4-layer-shell 1.0+, verify `SHA256SUMS`, extract the
+package for your architecture, and run `bash scripts/install.sh` inside it.
+The installer does not start the service. See the
+[installation guide](docs/INSTALL.md#release-artifacts-and-arch-packaging).
+
 Click the island to open it, drop a file into Inbox, and try a short timer:
 
 ```bash

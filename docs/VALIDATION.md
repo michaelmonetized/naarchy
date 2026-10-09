@@ -1,4 +1,32 @@
-# 0.4 validation
+# Validation
+
+## 0.5 release candidate
+
+Local candidate checks on October 9, 2026, used the isolated seasonal worktree
+on aarch64 Linux, GTK 4.22.5, and gtk4-layer-shell 1.3.0. Formatting, Clippy
+with warnings denied, and all 100 Rust tests passed with the supported Rust
+1.92.0 toolchain. The ordinary suite's native fixture returns without GTK;
+it was separately run on a private, software-rendered Sway output.
+The optimized ARM64 binary built successfully with Rust 1.92.0 and passed
+CLI and installer smoke checks using temporary installation staging.
+
+All nine native seasonal scenarios passed: welcome, reduced motion, pointer
+dismissal, interruption, off-date start, fangs, drips, bat, and reduced-motion
+bat. They verify continued typing, pointer pass-through, clipboard preservation,
+restoration, no replay, and transient-window cleanup. Dates are injected into
+test policy only; temporary XDG paths and a private D-Bus leave real first-run
+state, clipboard content, system time, and the installed app untouched. Fresh
+native screenshots were inspected. These checks supplement physical Hyprland,
+scaling, and multi-monitor review; they do not establish those physical checks.
+
+The x86-64 test binary cross-compiled against Ubuntu 24.04's GTK dependencies
+using Rust 1.92.0. The temporary environment's QEMU crashed with an internal
+SIGBUS before any test started. This is not an x86-64 runtime pass. Successful
+native x86-64 validation, remote CI, checksum/archive review, and installation
+from the generated archives remain required before publication. Local build
+evidence must not be substituted for these release gates.
+
+## 0.4 validation (historical)
 
 Validation performed on September 5, 2026, on an aarch64 Arch Linux desktop
 running Hyprland, GTK 4.22.4, gtk4-layer-shell 1.3.0, and Rust 1.98.0.
