@@ -1,0 +1,67 @@
+{
+  "verifiedAt": "2026-10-05T12:24:00Z",
+  "source": "Product Hunt saved prelaunch dashboard",
+  "__typename": "Post",
+  "canManage": true,
+  "commentsCount": 1,
+  "createdAt": "2026-10-06T00:01:00-07:00",
+  "detailedReviews": [],
+  "id": "1270450",
+  "isViewerTeamMember": true,
+  "launchState": "scheduled",
+  "makers": [
+    {
+      "__typename": "User",
+      "id": "7206502"
+    }
+  ],
+  "media": [
+    {
+      "__typename": "Media",
+      "id": "3623173",
+      "metadata": {
+        "__typename": "MediaMetadata",
+        "platform": null
+      }
+    },
+    {
+      "__typename": "Media",
+      "id": "3623172",
+      "metadata": {
+        "__typename": "MediaMetadata",
+        "platform": null
+      }
+    },
+    {
+      "__typename": "Media",
+      "id": "3623171",
+      "metadata": {
+        "__typename": "MediaMetadata",
+        "platform": null
+      }
+    },
+    {
+      "__typename": "Media",
+      "id": "3623170",
+      "metadata": {
+        "__typename": "MediaMetadata",
+        "platform": null
+      }
+    }
+  ],
+  "name": "Naarchy",
+  "product": {
+    "__typename": "Product",
+    "canEdit": true,
+    "categories": [],
+    "id": "1335781",
+    "name": "Naarchy",
+    "slug": "naarchy",
+    "url": "https://www.producthunt.com/products/naarchy"
+  },
+  "productState": "default",
+  "slug": "naarchy",
+  "tagline": "A little island for everything on your Linux desktop",
+  "thumbnailImageUuid": "9978c443-beb4-4eb4-9194-e956abfe7e28.png",
+  "url": "https://www.producthunt.com/products/naarchy?launch=naarchy"
+}
