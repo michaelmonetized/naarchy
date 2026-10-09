@@ -630,7 +630,7 @@ fn is_physical_address(s: &str) -> bool {
     let has_letter = t.chars().any(|c| c.is_alphabetic());
     let len_ok = t.len() > 8;
     // if it has a comma and digit and letter, likely address; or long with comma
-    (has_digit && has_letter && len_ok) || (has_comma && len_ok && has_letter)
+    (has_comma || has_digit) && len_ok && has_letter
 }
 
 fn directions_url_for(address: &str) -> String {
