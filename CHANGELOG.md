@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+- On a fresh installation's first daemon start on local October 10, binary
+  confetti settles into `thanks for installing naarchy happy 10/10`, then fades.
+  Existing configuration or data counts as prior use. A private decision is
+  saved before the welcome, so dismissal, interruption, and relaunch do not
+  replay it. Other first-run dates also consume the decision.
+- The welcome follows reduced-motion preferences with a static message and
+  supports pointer dismissal while normal typing and clipboard use continue.
+  Transient windows and animation sources are cleaned up on expiry and desktop
+  lifecycle changes.
+- On local October 31, occasional solid black fangs, drips, or an upside-down
+  bat gripping the island directly alternate with quiet stretches. Disable
+  costumes with the Halloween switch in Preferences or `appearance.halloween`.
+  Reduced motion shows static artwork immediately; decorations remain passive.
+- Added isolated native Wayland checks for seasonal rendering, input access,
+  clipboard preservation, dismissal, persistence, and cleanup.
+- Saved widget settings also count as prior use after the main configuration
+  is removed. Desktop build checks and release packaging now run locally;
+  removed the GitHub-hosted desktop build workflows.
+
 ## 0.4.0
 
 - Refined the island, Home, and collection pages with clearer typography,

@@ -4,8 +4,10 @@ mod cli;
 mod clip_store;
 mod config;
 mod diagnostics;
+mod first_run;
 mod ipc;
 mod omarchy;
+mod seasonal;
 mod services;
 mod shelf_store;
 mod theme;
@@ -20,6 +22,7 @@ use services::{Event, Verb};
 
 struct Startup {
     cfg: Config,
+    first_run: Option<first_run::FirstRun>,
     event_rx: mpsc::Receiver<Event>,
     verb_rx: mpsc::Receiver<Verb>,
     event_tx: services::EventTx,
@@ -89,6 +92,14 @@ fn start_daemon() {
     };
 
     let cfg_path = util::config_file();
+    let first_run =
+        match first_run::FirstRun::inspect(&cfg_path, &util::data_dir(), timefmt::today_parts()) {
+            Ok(first_run) => Some(first_run),
+            Err(error) => {
+                log::warn!("first-run welcome unavailable: {error}");
+                None
+            }
+        };
     Config::save_default_if_missing(&cfg_path);
     let cfg = match Config::load(&cfg_path) {
         Ok(cfg) => cfg,
@@ -186,6 +197,7 @@ fn start_daemon() {
     {
         *STARTUP.lock().unwrap() = Some(Startup {
             cfg,
+            first_run,
             event_rx,
             verb_rx,
             event_tx,
@@ -193,7 +205,14 @@ fn start_daemon() {
         gtk_app.connect_activate(|gtk_app| {
             gtk4::Window::set_default_icon_name("app.naarchy.Naarchy");
             if let Some(s) = STARTUP.lock().unwrap().take() {
-                app::run(gtk_app, s.cfg, s.event_rx, s.verb_rx, s.event_tx);
+                app::run(
+                    gtk_app,
+                    s.cfg,
+                    s.event_rx,
+                    s.verb_rx,
+                    s.event_tx,
+                    s.first_run,
+                );
             } else {
                 app::request_expand_all();
             }
@@ -201,6 +220,10 @@ fn start_daemon() {
     }
 
     let _hold = gtk_app.hold();
-    gtk_app.connect_shutdown(|_| crate::chime::alarm_stop());
+    gtk_app.connect_shutdown(|_| {
+        crate::app::dismiss_welcome();
+        crate::app::stop_seasonal();
+        crate::chime::alarm_stop();
+    });
     gtk_app.run_with_args(&["naarchy"]);
 }

@@ -19,6 +19,9 @@ pub struct App {
     pills: RefCell<Vec<PillUi>>,
     panels: RefCell<Vec<PanelUi>>,
     huds: RefCell<hud::HudManager>,
+    welcome: RefCell<Option<Rc<crate::ui::welcome::Welcome>>>,
+    halloween: RefCell<crate::seasonal::Halloween>,
+    started: std::time::Instant,
 }
 
 thread_local! {
@@ -28,6 +31,33 @@ thread_local! {
 
 pub fn with_app<R>(f: impl FnOnce(&Rc<App>) -> R) -> Option<R> {
     APP.with(|a| a.borrow().as_ref().map(f))
+}
+
+pub fn dismiss_welcome() {
+    with_app(|app| {
+        if let Some(welcome) = app.welcome.borrow_mut().take() {
+            welcome.finish();
+        }
+    });
+}
+
+pub fn stop_seasonal() {
+    with_app(|app| {
+        for pill in app.pills.borrow().iter() {
+            pill.set_costume(None);
+        }
+    });
+}
+
+fn tick_seasonal(app: &App) {
+    let costume = app.halloween.borrow_mut().update(
+        crate::timefmt::today_parts(),
+        app.shared.cfg.borrow().appearance.halloween,
+        app.started.elapsed(),
+    );
+    for (index, pill) in app.pills.borrow().iter().enumerate() {
+        pill.set_costume(costume.filter(|_| index < 8));
+    }
 }
 
 /// Choose the display under direct interaction. Exactly one shelf opens at a time.
@@ -283,6 +313,7 @@ pub fn run(
     events_rx: Receiver<Event>,
     verb_rx: Receiver<Verb>,
     event_tx: services::EventTx,
+    first_run: Option<crate::first_run::FirstRun>,
 ) {
     let shared = Shared::new(cfg);
     crate::ui::SHARED.with(|s| *s.borrow_mut() = Some(shared.clone()));
@@ -299,6 +330,9 @@ pub fn run(
         pills: RefCell::new(Vec::new()),
         panels: RefCell::new(Vec::new()),
         huds: RefCell::new(hud::HudManager::new(app)),
+        welcome: RefCell::new(None),
+        halloween: RefCell::new(crate::seasonal::Halloween::new(crate::util::now_unix())),
+        started: std::time::Instant::now(),
     });
 
     // Global expand callback used by pill hover + DnD
@@ -320,6 +354,21 @@ pub fn run(
     build_surfaces(&a, app);
     restart_hyprland(&a);
     pump_once();
+    tick_seasonal(&a);
+
+    if let Some(first_run) = first_run {
+        match first_run.consume() {
+            Ok(true) if !a.shared.fullscreen_hide.get() => {
+                *a.welcome.borrow_mut() = Some(crate::ui::welcome::Welcome::show(
+                    app,
+                    &a.monitors.borrow(),
+                    a.shared.accent_rgb(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!("first-run welcome skipped: cannot save state: {error}"),
+        }
+    }
 
     // GDK is authoritative for display additions/removals, including non-Hyprland sessions.
     if let Some(display) = gtk4::gdk::Display::default() {
@@ -335,6 +384,7 @@ pub fn run(
         let a3 = a.clone();
         glib::timeout_add_seconds_local(1, move || {
             tick_timer(&a3);
+            tick_seasonal(&a3);
             for p in a3.pills.borrow().iter() {
                 p.tick();
             }
@@ -417,6 +467,10 @@ fn sync_surfaces(app: &Rc<App>, force: bool) {
         .collect();
     if !force && *app.monitors.borrow() == wanted {
         return;
+    }
+    // A display/config change ends the transient welcome instead of remapping it.
+    if let Some(welcome) = app.welcome.borrow_mut().take() {
+        welcome.finish();
     }
     let was_expanded = app.shared.expanded.get();
     let active = app.monitors.borrow().get(app.active_monitor.get()).cloned();
@@ -524,6 +578,11 @@ fn handle_event(app: &Rc<App>, ev: Event) {
             }
         }
         Event::Fullscreen(on) => {
+            if on {
+                if let Some(welcome) = app.welcome.borrow_mut().take() {
+                    welcome.finish();
+                }
+            }
             let hide = on && app.shared.cfg.borrow().behavior.hide_fullscreen;
             app.shared.fullscreen_hide.set(hide);
             for (index, p) in app.pills.borrow().iter().enumerate() {

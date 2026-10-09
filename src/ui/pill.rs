@@ -50,9 +50,13 @@ pub struct PillUi {
     last_mood: Cell<Mood>,
     base_w: i32,
     show_clock: bool,
+    costume: Rc<RefCell<Option<super::costume::Decoration>>>,
 }
 
 impl PillUi {
+    pub fn set_costume(&self, costume: Option<crate::seasonal::Costume>) {
+        super::costume::update(&self.costume, &self.win, costume);
+    }
     pub fn build(
         app: &gtk4::Application,
         shared: &Rc<Shared>,
@@ -237,6 +241,11 @@ impl PillUi {
             super::panel::attach_file_drop(&win);
         }
 
+        let costume = Rc::new(RefCell::new(None));
+        let costume_hidden = costume.clone();
+        win.connect_hide(move |_| {
+            costume_hidden.borrow_mut().take();
+        });
         let p = Self {
             win,
             canvas,
@@ -268,6 +277,7 @@ impl PillUi {
             last_mood: Cell::new(Mood::None),
             base_w,
             show_clock,
+            costume,
         };
         p.win.present();
         p.tick();
@@ -641,6 +651,7 @@ impl Shared {
 
 impl Drop for PillUi {
     fn drop(&mut self) {
+        self.costume.borrow_mut().take();
         if let Some(tick) = self.flash_tick.take() {
             tick.remove();
         }

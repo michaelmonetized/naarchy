@@ -1,4 +1,46 @@
-# 0.4 validation
+# Validation
+
+## 0.5 release candidate
+
+Local candidate checks on October 9, 2026, used the isolated seasonal worktree
+on aarch64 Linux, GTK 4.22.5, and gtk4-layer-shell 1.3.0. Formatting, Clippy
+with warnings denied, and all 101 Rust tests passed with the supported Rust
+1.92.0 toolchain. The ordinary suite's native fixture returns without GTK;
+it was separately run on a private, software-rendered Sway output.
+The optimized ARM64 binary built successfully with Rust 1.92.0 and passed
+CLI and installer smoke checks using temporary installation staging.
+
+All nine native seasonal scenarios passed: welcome, reduced motion, pointer
+dismissal, interruption, off-date start, fangs, drips, bat, and reduced-motion
+bat. They verify continued typing, pointer pass-through, clipboard preservation,
+restoration, no replay, and transient-window cleanup. Dates are injected into
+test policy only; temporary XDG paths and a private D-Bus leave real first-run
+state, clipboard content, system time, and the installed app untouched. Fresh
+native screenshots were inspected. These checks supplement physical Hyprland,
+scaling, and multi-monitor review; they do not establish those physical checks.
+
+The x86-64 release and test binaries were cross-built locally with Rust 1.92.0.
+All 101 x86-64 tests and CLI smoke checks passed under the existing QEMU 11.1.1
+using a private cached GTK 4.20.3 runtime, a real gtk4-layer-shell 1.3.0 built
+locally, and the real libgbm from the official Mesa 26.2.4-1 archive. Earlier
+QEMU 8.2.2 crashed before tests began; QEMU 11.1.1 initially failed to map
+library segments. Appending zero padding after the existing private library
+bytes resolved those mappings on this host with 16 KiB pages. No function,
+symbol, test, or release binary was patched or stubbed. The complete suite then
+ran with temporary IPC sockets and a private D-Bus. All nine seasonal Wayland
+scenarios also passed under x86-64 emulation; their welcome and bat captures were
+inspected. The private runtime emitted fontconfig and unavailable input-module
+warnings while completing these checks. This is emulated x86-64 coverage, not a
+physical x86-64 desktop check. No system packages were installed and the running
+desktop app was not replaced.
+
+Desktop validation and packaging are local; no GitHub-hosted Actions run is a
+release gate. Archive checksums, architecture, glibc requirements, exact source
+provenance, and temporary installer staging are checked during local packaging.
+Physical Hyprland, scaling, and multi-monitor testing were not performed for this
+candidate. These are disclosed coverage limits, not claims of completed QA.
+
+## 0.4 validation (historical)
 
 Validation performed on September 5, 2026, on an aarch64 Arch Linux desktop
 running Hyprland, GTK 4.22.4, gtk4-layer-shell 1.3.0, and Rust 1.98.0.
@@ -55,11 +97,9 @@ shelf batches persist once per operation.
 
 ## Release boundaries
 
-The local archive targets aarch64 Linux and dynamically links GTK and the host
-system libraries; its glibc requirement is 2.39 or newer. The configured x86_64
-and aarch64 GitHub release jobs still need a successful remote run before public
-distribution, including the pinned Rust 1.92 toolchain check. This session did
-not publish a release or replace the installed
-desktop binary. Sustained everyday use and physical multi-monitor testing on
-supported target systems remain release gates. See [product scope](COMPARISON.md)
+The historical 0.4 local archive targeted aarch64 Linux and dynamically linked
+GTK and the host libraries, with glibc 2.39 or newer. That September validation
+session did not publish a release or replace the installed desktop binary.
+The current local release procedure is in [RELEASE.md](RELEASE.md); hosted
+desktop build workflows have been removed. See [product scope](COMPARISON.md)
 for integration boundaries and features not implemented.

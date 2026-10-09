@@ -91,8 +91,12 @@ margin_top = 0
 
 Tagged releases produce a source archive and native Linux packages for x86-64
 and ARM64, including the binary, desktop launcher, icon, and user service.
-Binaries dynamically link GTK and layer shell, so runtime dependencies must be
-installed. Verify the accompanying SHA-256 checksums before installation.
+[Download the latest release](https://github.com/michaelmonetized/naarchy/releases/latest)
+and choose `naarchy-x86_64-unknown-linux-gnu.tar.gz` or
+`naarchy-aarch64-unknown-linux-gnu.tar.gz` to match your machine.
+Binaries require glibc 2.39+ and dynamically link GTK 4.14+ and gtk4-layer-shell
+1.0+, so runtime dependencies must be installed. Verify the accompanying
+SHA-256 checksums before installation.
 
 After extracting the package, run `bash scripts/install.sh` from its directory.
 This installs into `~/.local/bin`, your application menu, and the user systemd

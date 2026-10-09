@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "naarchy"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "env_logger",
@@ -1118,6 +1118,8 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "ureq",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "wl-clipboard-rs",
  "zbus",
 ]

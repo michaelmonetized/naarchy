@@ -1,6 +1,6 @@
 [package]
 name = "naarchy"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.92"
 description = "A free, open-source notch / dynamic-island layer for Omarchy & Hyprland — file shelf, clipboard, media, HUDs."
@@ -25,6 +25,12 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 log = "0.4"
 env_logger = "0.11"
 rrule = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+# Already used transitively by clipboard support; native tests use a virtual
+# pointer on their isolated headless compositor instead of hardware input.
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [profile.release]
 lto = "thin"

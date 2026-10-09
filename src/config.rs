@@ -32,6 +32,8 @@ pub struct Appearance {
     pub opacity: f64,
     /// Minimize spatial animation while preserving all interaction feedback.
     pub reduce_motion: bool,
+    /// Small local-calendar costumes on October 31.
+    pub halloween: bool,
 }
 
 impl Default for Appearance {
@@ -53,6 +55,7 @@ impl Default for Appearance {
             panel_height: 460,
             opacity: 0.98,
             reduce_motion: false,
+            halloween: true,
         }
     }
 }
@@ -312,6 +315,7 @@ panel_width = 680
 panel_height = 460
 opacity = 0.98
 reduce_motion = false
+halloween = true
 
 [behavior]
 hover_open = true
