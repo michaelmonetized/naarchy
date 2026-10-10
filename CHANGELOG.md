@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
 
 - Plugin packages (proof of concept, plugin API 1): programs in any language
   installed under `~/.config/naarchy/plugins/<name>/` with a `plugin.toml`
