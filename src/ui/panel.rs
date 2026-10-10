@@ -543,6 +543,9 @@ impl PanelUi {
         self.cal_page.rebuild();
         self.poke_collapse_timer();
     }
+    pub fn notices_reload(&self, shared: &Rc<Shared>) {
+        self.home_page.notices_reload(shared);
+    }
     pub fn home_reload(&self) {
         self.home_page.apply_store();
         self.drawer_page.rebuild();

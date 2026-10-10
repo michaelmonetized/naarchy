@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Plugin packages (proof of concept, plugin API 1): programs in any language
+  installed under `~/.config/naarchy/plugins/<name>/` with a `plugin.toml`
+  manifest publish live activities to the island over JSON lines on stdio.
+  Packages are validated (inside their directory, owned by you, not
+  group/world-writable), run without a shell, restart with backoff, and can
+  show at most 8 bounded activities. New `naarchy plugin` commands install,
+  list, remove, enable, disable, and run packages; `features.plugins` turns
+  the host off. See docs/PLUGINS.md.
+- Bundled example plugin `contrib/plugins/t3-live`: active T3 Code agent
+  threads with project, status, and elapsed time, read from T3 Code's MCP
+  server with a read-only credential.
+- Notifications rework (`features.notifications = true`): no more pile of cards.
+  The island shows a bell with the waiting count; expanding it shows the list on
+  Home. New notifications peek as one card under the notch, then collapse into
+  the bell (`[notifications] peek = false` for bell only). Left click runs the
+  default action, focuses or opens the source app, and dismisses; right click
+  dismisses; no close buttons. Do-not-disturb follows Omarchy's shell DND and
+  freedesktop notification inhibitions (`Inhibit`/`UnInhibit`/`Inhibited`):
+  notifications are counted, not shown.
+
 ## 0.5.0
 
 - On a fresh installation's first daemon start on local October 10, binary

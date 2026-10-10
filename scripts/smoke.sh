@@ -80,4 +80,21 @@ DESTDIR="$SMOKE_RT/install" PREFIX=/usr XDG_CONFIG_HOME=/home/test/.config \
 [[ -f "$SMOKE_RT/install/usr/share/icons/hicolor/scalable/apps/app.naarchy.Naarchy.svg" ]]
 grep -Fq 'ExecStart="/usr/bin/naarchy" run' "$SMOKE_RT/install/home/test/.config/systemd/user/naarchy.service"
 
+# Plugin packages: install, list, disable, remove in the isolated config.
+"$BIN" plugin list | grep -F 'No plugins'
+"$BIN" plugin install contrib/plugins/t3-live >/dev/null
+"$BIN" plugin list | grep -E '^t3-live +0\.1\.0 +enabled +live-activity'
+"$BIN" plugin disable t3-live >/dev/null
+"$BIN" plugin list | grep -E '^t3-live .* disabled '
+set +e
+"$BIN" plugin remove ../etc >/dev/null 2>&1
+ec=$?
+set -e
+[[ "$ec" -eq 2 ]]
+"$BIN" plugin remove t3-live >/dev/null
+"$BIN" plugin list | grep -F 'No plugins'
+if command -v python3 >/dev/null; then
+  PYTHONDONTWRITEBYTECODE=1 python3 contrib/plugins/t3-live/test_t3_live.py
+fi
+
 echo "smoke ok"

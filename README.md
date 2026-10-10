@@ -113,6 +113,7 @@ Private calendar feed URLs are credentials: keep your configuration private.
 ## Learn more
 
 [Configuration](docs/CONFIG.md) · [CLI reference](docs/CLI.md) ·
+[Plugins](docs/PLUGINS.md) · [Roadmap](ROADMAP.md) ·
 [Theming](docs/THEMING.md) · [Product scope](docs/COMPARISON.md) ·
 [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 

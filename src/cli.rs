@@ -23,7 +23,10 @@ USAGE:
   naarchy clipboard paste-last    aliases: clip, copy-last
   naarchy timer <30s|25m|1h> | stop
   naarchy quit
-  naarchy install-binds           print recommended hyprland binds",
+  naarchy install-binds           print recommended hyprland binds
+  naarchy plugin list | path      installed plugin packages (no daemon)
+  naarchy plugin install DIR [--force] | remove NAME
+  naarchy plugin enable NAME | disable NAME | run NAME",
         env!("CARGO_PKG_VERSION")
     );
 }

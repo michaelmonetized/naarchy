@@ -27,7 +27,11 @@ naarchy clipboard paste-last
 naarchy timer <30s|25m|1h> | stop
 naarchy quit
 naarchy install-binds
+naarchy plugin <list|install DIR [--force]|remove NAME|enable NAME|disable NAME|run NAME|path>
 ```
+
+`plugin` commands manage packages on disk and do not need the daemon; see
+[Plugins](PLUGINS.md).
 
 Aliases: `daemon` = `run`. `clip` = `clipboard`. `copy-last` = `paste-last`.
 
@@ -81,7 +85,7 @@ invalid or overflowing values exit 2.
 
 ## Notify
 
-Paints a banner in the HUD. Does **not** require `features.notifications`.
+Shows a peek card under the notch (not kept in the notification list). Does **not** require `features.notifications`.
 Does not talk to mako.
 
 ## Single instance

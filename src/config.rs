@@ -116,6 +116,8 @@ pub struct Features {
     pub calendar: bool,
     pub timer: bool,
     pub notifications: bool,
+    /// Start plugin packages from ~/.config/naarchy/plugins (restart to apply).
+    pub plugins: bool,
 }
 
 impl Default for Features {
@@ -127,6 +129,7 @@ impl Default for Features {
             calendar: true,
             timer: true,
             notifications: false,
+            plugins: true,
         }
     }
 }
@@ -156,6 +159,21 @@ pub struct HudCfg {
 impl Default for HudCfg {
     fn default() -> Self {
         Self { timeout_ms: 1400 }
+    }
+}
+
+/// How notifications look when `features.notifications` is on.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct NotificationsCfg {
+    /// Briefly show one card under the notch for each new notification.
+    /// Off: only the bell and count on the island (and the list on Home).
+    pub peek: bool,
+}
+
+impl Default for NotificationsCfg {
+    fn default() -> Self {
+        Self { peek: true }
     }
 }
 
@@ -203,6 +221,7 @@ pub struct Config {
     pub features: Features,
     pub clipboard: ClipboardCfg,
     pub hud: HudCfg,
+    pub notifications: NotificationsCfg,
     pub clock: ClockCfg,
     pub calendar: CalendarCfg,
 }
@@ -332,6 +351,7 @@ clipboard = true
 calendar = true
 timer = true
 notifications = false   # own org.freedesktop.Notifications (leave false to keep mako/dunst)
+plugins = true          # run installed packages from ~/.config/naarchy/plugins (see naarchy plugin list)
 
 [clipboard]
 max_entries = 80
@@ -339,6 +359,9 @@ max_image_bytes = 8388608
 
 [hud]
 timeout_ms = 1400
+
+[notifications]
+peek = true              # one brief card per new notification; false = bell + count only
 
 [clock]
 format = "%H:%M"

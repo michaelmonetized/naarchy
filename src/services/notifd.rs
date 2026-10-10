@@ -24,6 +24,69 @@ struct Notifications {
     counter: AtomicU32,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<NotifCmd>,
     active: Arc<Mutex<HashMap<u32, u64>>>,
+    /// freedesktop inhibitions: cookie -> unique bus name of the holder.
+    inhibitors: Arc<Mutex<Inhibitors>>,
+}
+
+/// Cookies handed out by `Inhibit`, released by `UnInhibit` or when the
+/// holder drops off the bus.
+#[derive(Default)]
+struct Inhibitors {
+    next: u32,
+    held: HashMap<u32, String>,
+}
+
+impl Inhibitors {
+    const MAX: usize = 64;
+
+    fn add(&mut self, owner: String) -> Option<u32> {
+        if self.held.len() >= Self::MAX {
+            return None;
+        }
+        loop {
+            self.next = self.next.wrapping_add(1);
+            if self.next != 0 && !self.held.contains_key(&self.next) {
+                break;
+            }
+        }
+        self.held.insert(self.next, owner);
+        Some(self.next)
+    }
+
+    /// Only the holder may release its own cookie.
+    fn remove(&mut self, cookie: u32, owner: &str) -> bool {
+        if self.held.get(&cookie).map(String::as_str) == Some(owner) {
+            self.held.remove(&cookie);
+            return true;
+        }
+        false
+    }
+
+    fn drop_owner(&mut self, owner: &str) -> bool {
+        let before = self.held.len();
+        self.held.retain(|_, o| o != owner);
+        before != self.held.len()
+    }
+
+    fn active(&self) -> bool {
+        !self.held.is_empty()
+    }
+}
+
+fn hint_str(hints: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str, max: usize) -> String {
+    hints
+        .get(key)
+        .and_then(|v| <&str>::try_from(&**v).ok())
+        .filter(|v| v.len() <= max && !v.chars().any(char::is_control))
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn hint_bool(hints: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> bool {
+    hints
+        .get(key)
+        .and_then(|v| bool::try_from(&**v).ok())
+        .unwrap_or(false)
 }
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
@@ -81,6 +144,9 @@ impl Notifications {
             actions: pairs,
             urgency,
             timeout_ms: notification_timeout(expire_timeout, urgency),
+            desktop_entry: hint_str(&hints, "desktop-entry", 256),
+            exec: hint_str(&hints, "omarchy-exec", 4096),
+            transient: hint_bool(&hints, "transient"),
         }));
         drop(active);
         Ok(id)
@@ -100,6 +166,60 @@ impl Notifications {
                 reason: 3,
             });
         }
+    }
+
+    /// Notification inhibition (the draft freedesktop extension KDE and GNOME
+    /// clients use). While any cookie is held, Naarchy counts instead of popping.
+    async fn inhibit(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        _desktop_entry: String,
+        _reason: String,
+        _hints: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+    ) -> zbus::fdo::Result<u32> {
+        let owner = header
+            .sender()
+            .map(|s| s.to_string())
+            .ok_or_else(|| zbus::fdo::Error::Failed("no sender".into()))?;
+        let cookie = {
+            let mut inh = self.inhibitors.lock().unwrap_or_else(|e| e.into_inner());
+            let was = inh.active();
+            let cookie = inh
+                .add(owner)
+                .ok_or_else(|| zbus::fdo::Error::LimitsExceeded("too many inhibitions".into()))?;
+            if !was {
+                self.tx.send(Event::NotificationsInhibited(true));
+            }
+            cookie
+        };
+        let _ = self.inhibited_changed(&emitter).await;
+        Ok(cookie)
+    }
+
+    async fn un_inhibit(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        cookie: u32,
+    ) {
+        let owner = header.sender().map(|s| s.to_string()).unwrap_or_default();
+        let changed = {
+            let mut inh = self.inhibitors.lock().unwrap_or_else(|e| e.into_inner());
+            inh.remove(cookie, &owner) && !inh.active()
+        };
+        if changed {
+            self.tx.send(Event::NotificationsInhibited(false));
+            let _ = self.inhibited_changed(&emitter).await;
+        }
+    }
+
+    #[zbus(property)]
+    fn inhibited(&self) -> bool {
+        self.inhibitors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .active()
     }
 
     fn get_server_information(&self) -> (String, String, String, String) {
@@ -179,11 +299,13 @@ pub async fn run(tx: EventTx) -> zbus::Result<tokio::sync::mpsc::UnboundedSender
 
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<NotifCmd>();
     let active = Arc::new(Mutex::new(HashMap::new()));
+    let inhibitors = Arc::new(Mutex::new(Inhibitors::default()));
     let server = Notifications {
         tx: tx.clone(),
         counter: AtomicU32::new(100),
         cmd_tx: cmd_tx.clone(),
         active: active.clone(),
+        inhibitors: inhibitors.clone(),
     };
     conn.object_server()
         .at("/org/freedesktop/Notifications", server)
@@ -194,6 +316,46 @@ pub async fn run(tx: EventTx) -> zbus::Result<tokio::sync::mpsc::UnboundedSender
     if let Err(e) = conn.request_name(wkn).await {
         log::info!("another notification daemon owns {name} ({e}); banners disabled");
         return Err(e);
+    }
+
+    // An inhibition dies with its holder: drop cookies of names that leave the bus.
+    {
+        let conn = conn.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            use futures_lite::StreamExt;
+            let Ok(dbus) = zbus::fdo::DBusProxy::new(&conn).await else {
+                return;
+            };
+            let Ok(mut changes) = dbus.receive_name_owner_changed().await else {
+                return;
+            };
+            while let Some(change) = changes.next().await {
+                let Ok(args) = change.args() else { continue };
+                if args.new_owner().is_some() {
+                    continue;
+                }
+                let name = args.name().to_string();
+                let released = {
+                    let mut inh = inhibitors.lock().unwrap_or_else(|e| e.into_inner());
+                    inh.drop_owner(&name) && !inh.active()
+                };
+                if released {
+                    tx.send(Event::NotificationsInhibited(false));
+                    if let Ok(iface) = conn
+                        .object_server()
+                        .interface::<_, Notifications>("/org/freedesktop/Notifications")
+                        .await
+                    {
+                        let _ = iface
+                            .get()
+                            .await
+                            .inhibited_changed(iface.signal_emitter())
+                            .await;
+                    }
+                }
+            }
+        });
     }
 
     let conn2 = conn.clone();
@@ -245,6 +407,7 @@ mod tests {
             counter: AtomicU32::new(u32::MAX),
             cmd_tx,
             active: Arc::new(Mutex::new(HashMap::new())),
+            inhibitors: Default::default(),
         };
         let hints = [("urgency".into(), zbus::zvariant::OwnedValue::from(2_u8))]
             .into_iter()
@@ -269,6 +432,51 @@ mod tests {
         assert_eq!(banner.timeout_ms, None);
         assert_eq!(banner.actions, vec![("join".into(), "Join".into())]);
         assert!(!server.get_capabilities().contains(&"inline-reply".into()));
+        assert_eq!(banner.desktop_entry, "");
+        assert!(!banner.transient);
+    }
+
+    #[test]
+    fn hints_carry_source_app_exec_and_transient() {
+        use zbus::zvariant::{OwnedValue, Str};
+        let mut hints: HashMap<String, OwnedValue> = HashMap::new();
+        hints.insert(
+            "desktop-entry".into(),
+            OwnedValue::from(Str::from("org.mozilla.firefox")),
+        );
+        hints.insert(
+            "omarchy-exec".into(),
+            OwnedValue::from(Str::from("omarchy-update")),
+        );
+        hints.insert("transient".into(), OwnedValue::from(true));
+        assert_eq!(
+            hint_str(&hints, "desktop-entry", 256),
+            "org.mozilla.firefox"
+        );
+        assert_eq!(hint_str(&hints, "omarchy-exec", 4096), "omarchy-update");
+        assert_eq!(hint_str(&hints, "desktop-entry", 4), "");
+        assert!(hint_bool(&hints, "transient"));
+        assert!(!hint_bool(&hints, "resident"));
+        hints.insert("bad".into(), OwnedValue::from(Str::from("a\nb")));
+        assert_eq!(hint_str(&hints, "bad", 99), "");
+    }
+
+    #[test]
+    fn inhibitions_belong_to_their_holder() {
+        let mut inh = Inhibitors::default();
+        let a = inh.add(":1.10".into()).unwrap();
+        let b = inh.add(":1.11".into()).unwrap();
+        assert_ne!(a, b);
+        assert!(inh.active());
+        assert!(!inh.remove(a, ":1.11"), "another client cannot release it");
+        assert!(inh.remove(a, ":1.10"));
+        assert!(inh.active());
+        assert!(inh.drop_owner(":1.11"));
+        assert!(!inh.active());
+        for i in 0..Inhibitors::MAX {
+            assert!(inh.add(format!(":1.{i}")).is_some());
+        }
+        assert!(inh.add(":1.999".into()).is_none());
     }
 
     #[test]
@@ -280,6 +488,7 @@ mod tests {
             counter: AtomicU32::new(0),
             cmd_tx,
             active: Arc::new(Mutex::new(HashMap::new())),
+            inhibitors: Default::default(),
         };
         let send = |replace, timeout| {
             server
@@ -341,6 +550,7 @@ mod tests {
             counter: AtomicU32::new(0),
             cmd_tx,
             active: Arc::new(Mutex::new(HashMap::new())),
+            inhibitors: Default::default(),
         };
         let oversized = "🔔".repeat(1025);
         let error = server

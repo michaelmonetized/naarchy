@@ -68,11 +68,14 @@ updates on an isolated D-Bus session, and notification replacement handling.
 - Three monitor add/remove cycles and three settings rebuild cycles without
   a crash; one expanded panel on the selected output.
 - Fullscreen hides the island and exiting fullscreen restores it.
-- Notification replacement cancels the original expiry and the replacement
-  expires on its own deadline.
-- On a private D-Bus, three persistent alerts remain visible while a fourth
-  waits; dismissing the first reveals the fourth, and explicit closure removes
-  all banners without disturbing the island.
+- Notifications (headless sway, private D-Bus, virtual pointer): a new
+  notification shows one peek card and the bell count; left click emits
+  `ActionInvoked(id, "default")` then `NotificationClosed(id, 2)`; right click
+  emits only `NotificationClosed(id, 2)`; peeks collapse into the bell; with
+  Omarchy DND (`notifications.json` `"dnd": true`) or a held `Inhibit` cookie
+  nothing pops, the bell mutes and the count grows; an inhibition is released by
+  `UnInhibit` or when its holder leaves the bus; expanding the island lists them
+  on Home.
 - Multiple shelf previews render without GTK size warnings.
 
 The lifecycle checks caught and fixed a GTK 4.22.4 crash when destroying a

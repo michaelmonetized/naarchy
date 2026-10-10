@@ -50,6 +50,7 @@ clipboard = true          # clipboard capture and history page
 calendar = true           # Calendar page and feed refresh
 timer = true              # timer controls and live activity
 notifications = false     # own org.freedesktop.Notifications (leave false for mako)
+plugins = true            # start installed plugin packages (docs/PLUGINS.md)
 
 [clipboard]
 max_entries = 80
@@ -110,26 +111,57 @@ does not request automatic geolocation or send calendar addresses to routing
 services. Enabling it uses IPinfo (or ipapi.co) for an approximate starting location, Nominatim
 for event addresses, and OSRM for estimated driving time. Estimates are approximate.
 
-## Notification banners
+## Notifications
 
-Naarchy shows at most three banners at once and queues up to 32 more. Persistent
-banners stay visible until dismissed, and a banner's expiration timer starts
-when it becomes visible. If the pending queue fills, overflow is reported to the
-sender as a closed notification with an undefined reason. Retention is bounded;
-Naarchy is not a notification archive.
+With `features.notifications = true`, Naarchy owns `org.freedesktop.Notifications`
+and notifications live on the island instead of piling up as cards:
+
+- The island shows a bell and the number of waiting notifications. Expanding the
+  island (click it) shows the list at the top of Home, newest first.
+- Each new notification gets one brief peek card under the notch (a newer one
+  replaces it; there is never a stack). It collapses into the bell after the
+  sender's timeout (clamped to 1.5–30 s; 6 s by default). Critical notifications
+  without a timeout stay until you act. `[notifications] peek = false` turns peek
+  cards off: bell and count only.
+- **Left click** anywhere on a notification runs its default action (the
+  freedesktop `default` action, else its first action; Omarchy's `omarchy-exec`
+  hint when present), focuses the sending app's window (Omarchy's
+  `omarchy-hyprland-focus-app` when installed, else Hyprland IPC by window class
+  from the `desktop-entry` hint or app name), and dismisses it. When there is no
+  action and no window, the app's desktop entry is launched with `gtk-launch`.
+- **Right click** (or middle click) dismisses. Escape dismisses the peek card.
+  There is no close button; "Clear all" on the list dismisses everything.
+- **Do not disturb**: while Omarchy's shell DND is on
+  (`~/.local/state/omarchy/notifications.json` `"dnd": true`, toggled by
+  `omarchy-toggle-notification-silencing`) or any client holds a freedesktop
+  notification inhibition (`Inhibit`/`UnInhibit`, `Inhibited` property; released
+  automatically when the holder leaves the bus), nothing pops: notifications are
+  only counted and the bell shows as muted. Like Omarchy, `omarchy-action`
+  notifications and critical `notify-send` ones still pop.
+- A notification stays in the list until you act on it, dismiss it, or the sender
+  closes it; the list keeps the newest 50 (older ones close as expired).
+  `transient` notifications and Naarchy's own banners only peek.
+
+```toml
+[notifications]
+peek = true   # false: bell + count only, no peek card
+```
 
 Leave `features.notifications = false` to keep your existing desktop notification
-service. `naarchy notify` can still show a local banner with that setting off.
+service (mako, dunst, Omarchy's shell). `naarchy notify` can still show a local
+peek with that setting off.
 
 ## Files naarchy owns
 
 ```
 ~/.config/naarchy/config.toml
 ~/.config/naarchy/widgets.json          # Home widget set
+~/.config/naarchy/plugins/<name>/       # installed plugin packages
 ~/.local/share/naarchy/shelf.json
 ~/.local/share/naarchy/clipboard.json
 ~/.local/share/naarchy/first-run.json   # once-only local-calendar welcome decision
 ~/.local/share/naarchy/blobs/
+~/.local/share/naarchy/plugins/<name>/  # each plugin's private data
 ~/.cache/naarchy/art/
 ~/.cache/naarchy/calendar/
 ~/.cache/naarchy/alarm-v2.wav

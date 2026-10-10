@@ -24,6 +24,7 @@ struct Slot {
 
 pub struct HomePage {
     root: gtk4::Box,
+    notices: super::notices::ListSection,
     grid: gtk4::Grid,
     slots: Vec<Slot>,
     empty: gtk4::Box,
@@ -53,6 +54,8 @@ impl HomePage {
         }
         head.append(&customize);
         root.append(&head);
+        let notices = super::notices::ListSection::build(shared);
+        root.append(notices.root());
 
         let grid = gtk4::Grid::new();
         grid.set_column_spacing(12);
@@ -149,13 +152,19 @@ impl HomePage {
 
         let p = Self {
             root,
+            notices,
             grid,
             slots,
             empty,
             active: RefCell::new(Vec::new()),
         };
         p.apply_store();
+        p.notices.reload(shared);
         p
+    }
+
+    pub fn notices_reload(&self, shared: &Rc<Shared>) {
+        self.notices.reload(shared);
     }
 
     /// Reorder + show children to match the current widget store.

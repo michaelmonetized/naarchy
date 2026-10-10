@@ -1,5 +1,4 @@
 use super::motion::{self, Spring};
-use crate::services::Banner;
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{glib, ApplicationWindow, DrawingArea, Label};
@@ -14,31 +13,8 @@ pub struct HudManager {
     label: Option<Label>,
     timeout: Rc<Cell<Option<glib::SourceId>>>,
     tick: Rc<Cell<Option<gtk4::TickCallbackId>>>,
-    banners: Vec<BannerWindow>,
-    pending_banners: std::collections::VecDeque<Banner>,
     bells: Vec<ApplicationWindow>,
     bell_src: Rc<Cell<Option<glib::SourceId>>>,
-}
-
-const MAX_VISIBLE_BANNERS: usize = 3;
-const MAX_PENDING_BANNERS: usize = 32;
-
-struct BannerWindow {
-    id: u32,
-    generation: u64,
-    persistent: bool,
-    win: ApplicationWindow,
-    height: i32,
-    timeout: Rc<Cell<Option<glib::SourceId>>>,
-}
-
-impl Drop for BannerWindow {
-    fn drop(&mut self) {
-        if let Some(source) = self.timeout.take() {
-            source.remove();
-        }
-        self.win.destroy();
-    }
 }
 
 impl HudManager {
@@ -50,8 +26,6 @@ impl HudManager {
             label: None,
             timeout: Rc::new(Cell::new(None)),
             tick: Rc::new(Cell::new(None)),
-            banners: Vec::new(),
-            pending_banners: std::collections::VecDeque::new(),
             bells: Vec::new(),
             bell_src: Rc::new(Cell::new(None)),
         }
@@ -124,107 +98,6 @@ impl HudManager {
         });
     }
 
-    pub fn show_banner(&mut self, b: Banner, shared: &Rc<super::Shared>) {
-        if let Some(index) = self.banners.iter().position(|old| old.id == b.id) {
-            if self.banners[index].generation > b.generation {
-                return;
-            }
-            self.banners.remove(index);
-            if let Some(window) = self.build_banner(b, shared) {
-                self.banners.insert(index, window);
-            }
-            self.reflow();
-            return;
-        }
-        if let Some(old) = self.pending_banners.iter_mut().find(|old| old.id == b.id) {
-            if old.generation <= b.generation {
-                *old = b;
-            }
-            return;
-        }
-        if self.banners.len() >= MAX_VISIBLE_BANNERS {
-            if let Some(index) = self.banners.iter().position(|old| !old.persistent) {
-                let old = self.banners.remove(index);
-                dismiss_banner(shared, old.id, old.generation, 1);
-            } else {
-                // Explicitly persistent banners stay visible until dismissed.
-                // Queue a bounded number and reject overflow without replacing
-                // previously accepted persistent notifications.
-                if self.pending_banners.len() < MAX_PENDING_BANNERS {
-                    self.pending_banners.push_back(b);
-                } else {
-                    dismiss_banner(shared, b.id, b.generation, 4);
-                }
-                return;
-            }
-        }
-        if let Some(window) = self.build_banner(b, shared) {
-            self.banners.push(window);
-        }
-        self.reflow();
-    }
-
-    fn build_banner(&self, b: Banner, shared: &Rc<super::Shared>) -> Option<BannerWindow> {
-        let app = self.app.upgrade()?;
-        let (win, card) = make_banner_window(&app, &b, shared);
-        let height = card.measure(gtk4::Orientation::Vertical, 376).1.max(66) + 12;
-        win.set_opacity(0.0);
-        let weak = win.downgrade();
-        motion::tween(
-            &win,
-            180,
-            move |t| {
-                if let Some(win) = weak.upgrade() {
-                    win.set_opacity(t);
-                }
-            },
-            || {},
-        );
-        let timeout = Rc::new(Cell::new(None));
-        if let Some(ms) = b.timeout_ms {
-            let slot = timeout.clone();
-            let shared = shared.clone();
-            let id = b.id;
-            let generation = b.generation;
-            let source = glib::timeout_add_local_once(
-                std::time::Duration::from_millis(ms.max(1)),
-                move || {
-                    slot.set(None);
-                    dismiss_banner(&shared, id, generation, 1);
-                },
-            );
-            timeout.set(Some(source));
-        }
-        Some(BannerWindow {
-            id: b.id,
-            generation: b.generation,
-            persistent: b.timeout_ms.is_none(),
-            win,
-            height,
-            timeout,
-        })
-    }
-
-    /// Only close the notification generation that requested dismissal; an old
-    /// timeout must not remove a replacement received through another worker.
-    pub fn close_banner(&mut self, id: u32, generation: u64) {
-        self.banners
-            .retain(|banner| banner.id != id || banner.generation != generation);
-        self.pending_banners
-            .retain(|banner| banner.id != id || banner.generation != generation);
-        super::with_shared(|shared| {
-            while self.banners.len() < MAX_VISIBLE_BANNERS {
-                let Some(next) = self.pending_banners.pop_front() else {
-                    break;
-                };
-                if let Some(window) = self.build_banner(next, shared) {
-                    self.banners.push(window);
-                }
-            }
-        });
-        self.reflow();
-    }
-
     /// Full-screen visual bell on every monitor. Click or any key dismisses
     /// the timer (and this overlay).
     pub fn ring_bell(&mut self) {
@@ -276,17 +149,6 @@ impl HudManager {
             w.close();
         }
     }
-
-    fn reflow(&mut self) {
-        use gtk4_layer_shell::{Edge, LayerShell};
-        // drop closed/hidden banners and free their surfaces
-        self.banners.retain(|banner| banner.win.is_visible());
-        let mut top = 84;
-        for banner in &self.banners {
-            banner.win.set_margin(Edge::Top, top);
-            top += banner.height + 10;
-        }
-    }
 }
 
 impl Drop for HudManager {
@@ -301,19 +163,6 @@ impl Drop for HudManager {
         if let Some(win) = self.win.take() {
             win.destroy();
         }
-    }
-}
-
-fn dismiss_banner(shared: &Rc<super::Shared>, id: u32, generation: u64, reason: u8) {
-    if let Some(tx) = shared.ui_tx.borrow().as_ref() {
-        tx.send(crate::services::Event::CloseBanner { id, generation });
-    }
-    if let Some(tx) = shared.notif_cmd.borrow().as_ref() {
-        let _ = tx.send(crate::services::notifd::NotifCmd::Close {
-            id,
-            reason,
-            generation,
-        });
     }
 }
 
@@ -475,140 +324,6 @@ fn gdk4_cairo_hack_line_cap() -> gtk4::cairo::LineCap {
     gtk4::cairo::LineCap::Round
 }
 
-pub fn make_banner_window(
-    app: &gtk4::Application,
-    b: &Banner,
-    shared: &Rc<super::Shared>,
-) -> (ApplicationWindow, gtk4::Box) {
-    let win = ApplicationWindow::builder()
-        .application(app)
-        .title("naarchy-banner")
-        .decorated(false)
-        .resizable(false)
-        .default_width(400)
-        .default_height(66)
-        .build();
-    super::setup_layer(&win, None);
-    use gtk4_layer_shell::{Edge, LayerShell};
-    win.set_margin(Edge::Top, 52);
-    win.set_visible(true);
-
-    let card = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-    let mut classes: Vec<&str> = vec!["na-banner"];
-    if b.urgency == 2 {
-        classes.push("critical");
-    }
-    card.set_css_classes(&classes);
-    card.set_margin_start(12);
-    card.set_margin_end(12);
-    card.set_margin_top(6);
-    card.set_margin_bottom(6);
-
-    let head = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-    let ic = super::label(&["na-glyph"], super::g::INBOX);
-    let sum = super::label(&["na-title"], &b.summary);
-    sum.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-    sum.set_hexpand(true);
-    sum.set_max_width_chars(34);
-    sum.set_xalign(0.0);
-    let sp = super::label(&[""], "");
-    sp.set_hexpand(true);
-    head.append(&ic);
-    head.append(&sum);
-    head.append(&sp);
-    if !b.app_name.is_empty() && b.app_name != "naarchy" {
-        let app_name = super::label(&["na-dim"], &b.app_name);
-        app_name.set_max_width_chars(12);
-        app_name.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        app_name.set_single_line_mode(true);
-        app_name.set_tooltip_text(Some(&b.app_name));
-        head.append(&app_name);
-    }
-    let close = gtk4::Button::with_label("×");
-    close.set_css_classes(&["na-banner-action"]);
-    super::describe(&close, "Dismiss notification");
-    let id = b.id;
-    let generation = b.generation;
-    let sh = shared.clone();
-    close.connect_clicked(move |_| dismiss_banner(&sh, id, generation, 2));
-    head.append(&close);
-    card.append(&head);
-
-    if !b.body.is_empty() {
-        let body = super::label(&["na-dim"], &strip_markup(&b.body));
-        body.set_wrap(true);
-        body.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
-        body.set_max_width_chars(48);
-        body.set_lines(4);
-        body.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        body.set_xalign(0.0);
-        card.append(&body);
-    }
-
-    if !b.actions.is_empty() {
-        let acts = gtk4::FlowBox::new();
-        acts.set_min_children_per_line(1);
-        acts.set_max_children_per_line(3);
-        acts.set_selection_mode(gtk4::SelectionMode::None);
-        acts.set_column_spacing(6);
-        acts.set_row_spacing(6);
-        acts.set_valign(gtk4::Align::Start);
-        for (key, labeltxt) in &b.actions {
-            let btn = gtk4::Button::with_label(labeltxt);
-            btn.set_css_classes(&["na-banner-action"]);
-            super::describe(&btn, labeltxt);
-            if let Some(text) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-                text.set_max_width_chars(18);
-                text.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-                text.set_single_line_mode(true);
-            }
-            let cmd_tx = shared.notif_cmd.borrow().clone();
-            let id = b.id;
-            let generation = b.generation;
-            let key2 = key.clone();
-            let sh = shared.clone();
-            btn.connect_clicked(move |_| {
-                if let Some(tx) = &cmd_tx {
-                    let _ = tx.send(crate::services::notifd::NotifCmd::Action {
-                        id,
-                        key: key2.clone(),
-                        generation,
-                    });
-                }
-                if let Some(tx) = sh.ui_tx.borrow().as_ref() {
-                    tx.send(crate::services::Event::CloseBanner { id, generation });
-                }
-            });
-            acts.append(&btn);
-        }
-        let actions_scroll = gtk4::ScrolledWindow::new();
-        actions_scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-        actions_scroll.set_max_content_height(120);
-        actions_scroll.set_propagate_natural_height(true);
-        actions_scroll.add_css_class("na-scroll");
-        actions_scroll.set_child(Some(&acts));
-        card.append(&actions_scroll);
-    }
-
-    win.set_child(Some(&card));
-
-    let key = gtk4::EventControllerKey::new();
-    let sh = shared.clone();
-    let id = b.id;
-    let generation = b.generation;
-    key.connect_key_pressed(move |_, key, _, _| {
-        if key == gdk::Key::Escape {
-            dismiss_banner(&sh, id, generation, 2);
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    win.add_controller(key);
-
-    (win, card)
-}
-
 fn make_bell_window(
     app: &gtk4::Application,
     monitor: Option<&gdk::Monitor>,
@@ -693,18 +408,4 @@ fn bell_alpha(t: f64) -> f64 {
     } else {
         0.28 + 0.52 * ((t * 2.2).sin().abs())
     }
-}
-
-fn strip_markup(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for ch in s.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            c if !in_tag => out.push(c),
-            _ => {}
-        }
-    }
-    out
 }
