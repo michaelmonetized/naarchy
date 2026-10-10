@@ -57,7 +57,7 @@ are ignored.
 **Naarchy → plugin (stdin).** One line, then nothing:
 
 ```json
-{"type":"hello","api":1,"naarchy":"0.5.1","plugin":"t3-live"}
+{"type":"hello","api":1,"naarchy":"0.5.2","plugin":"t3-live"}
 ```
 
 When stdin reaches end of file, Naarchy has gone away: **exit**. Naarchy also

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2
+
+- `naarchy notifications dismiss | clear | invoke | dnd [toggle|on|off]`, so
+  Omarchy's notification keys (`SUPER+,`, `SUPER+SHIFT+,`, `SUPER+CTRL+,`,
+  `SUPER+ALT+,`) work when Naarchy is the notification daemon. `dnd` writes
+  Omarchy's `notifications.json`, so the setting is shared and persists.
+  `naarchy install-binds` and `contrib/hyprland.conf` include the bindings.
+- When another daemon owns `org.freedesktop.Notifications`, Naarchy now queues
+  for the name and takes over when it exits, instead of giving up until restart.
+- docs/CONFIG.md: how to hand the name over from Omarchy's shell.
+
 ## 0.5.1
 
 - Plugin packages (proof of concept, plugin API 1): programs in any language

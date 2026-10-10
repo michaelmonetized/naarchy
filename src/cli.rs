@@ -17,6 +17,10 @@ USAGE:
   naarchy hud <volume|brightness|mic|battery|caps|custom> [value|+N|-N]
                                   [--icon GLYPH] [--label TEXT]
   naarchy notify SUMMARY [BODY]   banner (does not need notifd)
+  naarchy notifications dismiss | clear | invoke
+                                  dismiss the newest, dismiss all, or open the newest
+  naarchy notifications dnd [toggle|on|off]
+                                  do-not-disturb (shared with Omarchy's state file)
   naarchy shelf add PATH…
   naarchy shelf list              print shelf.json as a JSON array (no daemon)
   naarchy shelf clear | remove ID
@@ -54,6 +58,25 @@ fn parse_duration(s: &str) -> Option<u64> {
         .filter(|n| (1..=crate::ui::timer::MAX_SECS).contains(n))
 }
 
+const NOTICES_USAGE: &str =
+    "usage: naarchy notifications dismiss | clear | invoke | dnd [toggle|on|off]";
+
+/// Parse `naarchy notifications …`.
+fn notice_cmd(rest: &[String]) -> Result<crate::services::NoticeCmd, String> {
+    use crate::services::NoticeCmd;
+    let sub = rest.first().map(|s| s.as_str());
+    let arg = rest.get(1).map(|s| s.as_str());
+    match (sub, arg) {
+        (Some("dismiss") | Some("dismiss-one") | Some("close"), None) => Ok(NoticeCmd::Dismiss),
+        (Some("clear") | Some("dismiss-all"), None) => Ok(NoticeCmd::Clear),
+        (Some("invoke") | Some("invoke-last") | Some("open"), None) => Ok(NoticeCmd::Invoke),
+        (Some("dnd") | Some("silence"), None | Some("toggle")) => Ok(NoticeCmd::Dnd(None)),
+        (Some("dnd") | Some("silence"), Some("on")) => Ok(NoticeCmd::Dnd(Some(true))),
+        (Some("dnd") | Some("silence"), Some("off")) => Ok(NoticeCmd::Dnd(Some(false))),
+        _ => Err(NOTICES_USAGE.into()),
+    }
+}
+
 /// Build a Verb from raw CLI tokens.
 ///
 /// Resolves HUD auto-detect when no value/step is given. Unknown tab names
@@ -79,6 +102,7 @@ fn verb_from_args(verb: &str, rest: &[String]) -> Result<Verb, String> {
             Ok(Verb::Tab(name.clone()))
         }
         "quit" => Ok(Verb::Quit),
+        "notifications" | "notices" | "notification" => notice_cmd(rest).map(Verb::Notices),
         "timer" => match rest.first().map(|s| s.as_str()) {
             Some("stop") | Some("reset") => Ok(Verb::TimerStop),
             Some(d) => parse_duration(d)
@@ -298,6 +322,12 @@ bind = SUPER, V, exec, naarchy tab clipboard
 # Timer presets
 bind = SUPER ALT, T, exec, naarchy timer 25m
 
+# Notifications (when features.notifications = true), Omarchy's keys
+bind = SUPER, comma, exec, naarchy notifications dismiss
+bind = SUPER SHIFT, comma, exec, naarchy notifications clear
+bind = SUPER CTRL, comma, exec, naarchy notifications dnd toggle
+bind = SUPER ALT, comma, exec, naarchy notifications invoke
+
 # HUDs that replace system overlays (chain your real volume/brightness tools).
 # `auto` is not a parser token — with no value/step, naarchy reads pamixer/brightnessctl.
 binde = , XF86AudioRaiseVolume, exec, pamixer -ui 5 && naarchy hud volume auto
@@ -320,6 +350,26 @@ layerrule = ignorealpha 0.2, naarchy
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_subcommands() {
+        use crate::services::NoticeCmd;
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(notice_cmd(&args(&["dismiss"])), Ok(NoticeCmd::Dismiss));
+        assert_eq!(notice_cmd(&args(&["dismiss-all"])), Ok(NoticeCmd::Clear));
+        assert_eq!(notice_cmd(&args(&["invoke"])), Ok(NoticeCmd::Invoke));
+        assert_eq!(notice_cmd(&args(&["dnd"])), Ok(NoticeCmd::Dnd(None)));
+        assert_eq!(
+            notice_cmd(&args(&["dnd", "on"])),
+            Ok(NoticeCmd::Dnd(Some(true)))
+        );
+        assert_eq!(
+            notice_cmd(&args(&["dnd", "off"])),
+            Ok(NoticeCmd::Dnd(Some(false)))
+        );
+        assert!(notice_cmd(&args(&["dnd", "maybe"])).is_err());
+        assert!(notice_cmd(&args(&[])).is_err());
+    }
 
     #[test]
     fn wpctl_parser_handles_mute_and_low_volume() {

@@ -313,9 +313,23 @@ pub async fn run(tx: EventTx) -> zbus::Result<tokio::sync::mpsc::UnboundedSender
 
     let name = "org.freedesktop.Notifications";
     let wkn = zbus::names::WellKnownName::try_from(name).expect("valid well-known name");
-    if let Err(e) = conn.request_name(wkn).await {
-        log::info!("another notification daemon owns {name} ({e}); banners disabled");
-        return Err(e);
+    // Queue rather than give up: when another daemon (Omarchy's shell, mako,
+    // dunst) holds the name, Naarchy takes over as soon as it lets go.
+    {
+        use zbus::fdo::{RequestNameFlags, RequestNameReply};
+        match conn
+            .request_name_with_flags(wkn, RequestNameFlags::ReplaceExisting.into())
+            .await?
+        {
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {}
+            RequestNameReply::InQueue => log::warn!(
+                "another notification daemon owns {name}; queued, Naarchy takes over when it exits"
+            ),
+            RequestNameReply::Exists => {
+                log::info!("another notification daemon owns {name}; banners disabled");
+                return Err(zbus::Error::NameTaken);
+            }
+        }
     }
 
     // An inhibition dies with its holder: drop cookies of names that leave the bus.
