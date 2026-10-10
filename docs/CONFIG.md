@@ -147,6 +147,19 @@ and notifications live on the island instead of piling up as cards:
 peek = true   # false: bell + count only, no peek card
 ```
 
+Keyboard: `naarchy notifications dismiss` (the peeking card, else the newest),
+`clear` (all), `invoke` (left-click the newest), and `dnd [toggle|on|off]`.
+`dnd` writes Omarchy's state file above, so the setting is shared and survives
+restarts. `naarchy install-binds` prints Omarchy's comma bindings for them.
+
+Only one program can own `org.freedesktop.Notifications`. If another daemon
+holds it when Naarchy starts, Naarchy waits in the bus queue and takes over
+when that daemon exits. On Omarchy, turn the shell's notification service off
+so it never claims the name: add `"disabledPlugins": ["omarchy.notifications"]`
+to `~/.config/omarchy/shell.json`, restart the shell (`omarchy-restart-shell`),
+and point the comma bindings at the commands above (the shell's DND indicator
+and `omarchy-shell notifications …` go away with its service).
+
 Leave `features.notifications = false` to keep your existing desktop notification
 service (mako, dunst, Omarchy's shell). `naarchy notify` can still show a local
 peek with that setting off.

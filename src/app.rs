@@ -279,6 +279,48 @@ fn notice_arrived(app: &Rc<App>, b: Banner) {
     refresh_notices(app);
 }
 
+/// `naarchy notifications …` (the Omarchy notification keybinds).
+fn notice_command(app: &Rc<App>, cmd: crate::services::NoticeCmd) {
+    use crate::services::NoticeCmd;
+    // The peeking card first (it may be an ephemeral one not in the list),
+    // else the newest notification in the list.
+    let target = || {
+        app.peek
+            .borrow()
+            .current()
+            .or_else(|| app.shared.notices.borrow().newest().cloned())
+    };
+    match cmd {
+        NoticeCmd::Dismiss => {
+            if let Some(b) = target() {
+                notices::dismiss(&app.shared, b.id, b.generation, 2);
+            }
+        }
+        NoticeCmd::Clear => {
+            app.peek.borrow_mut().hide();
+            let ids = app.shared.notices.borrow().ids();
+            for (id, generation) in ids {
+                notices::dismiss(&app.shared, id, generation, 2);
+            }
+        }
+        NoticeCmd::Invoke => {
+            if let Some(b) = target() {
+                notices::activate(&app.shared, &b);
+            }
+        }
+        NoticeCmd::Dnd(want) => {
+            let on = want.unwrap_or_else(|| !notices::omarchy_dnd());
+            if let Err(error) = notices::set_omarchy_dnd_file(on) {
+                log::warn!("could not save do-not-disturb: {error}");
+            }
+            if app.shared.notices.borrow_mut().set_omarchy_dnd(on) && on {
+                app.peek.borrow_mut().hide();
+            }
+            refresh_notices(app);
+        }
+    }
+}
+
 /// Redraw the bell on every pill and the list on every panel.
 fn refresh_notices(app: &Rc<App>) {
     for p in app.panels.borrow().iter() {
@@ -876,6 +918,7 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
                 },
             );
         }
+        Verb::Notices(cmd) => notice_command(app, cmd),
         Verb::Quit => {
             crate::chime::alarm_stop();
             app.gtk_app.quit();

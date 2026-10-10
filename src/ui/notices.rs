@@ -124,6 +124,10 @@ impl Inbox {
         before != self.items.len()
     }
 
+    pub fn newest(&self) -> Option<&Banner> {
+        self.items.last()
+    }
+
     pub fn ids(&self) -> Vec<(u32, u64)> {
         self.items.iter().map(|b| (b.id, b.generation)).collect()
     }
@@ -165,15 +169,43 @@ pub fn parse_omarchy_dnd(raw: &str) -> Option<bool> {
         .as_bool()
 }
 
+fn omarchy_state_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(std::path::Path::new(&home).join(".local/state/omarchy/notifications.json"))
+}
+
 pub fn omarchy_dnd() -> bool {
-    let Some(home) = std::env::var_os("HOME") else {
-        return false;
-    };
-    let path = std::path::Path::new(&home).join(".local/state/omarchy/notifications.json");
-    std::fs::read_to_string(path)
-        .ok()
+    omarchy_state_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|raw| parse_omarchy_dnd(&raw))
         .unwrap_or(false)
+}
+
+/// Omarchy's state file with `dnd` set, other keys kept. A missing or broken
+/// file starts from Omarchy's own shape (`{"version":3}`).
+pub fn with_omarchy_dnd(raw: Option<&str>, on: bool) -> String {
+    let mut value = raw
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({ "version": 3 }));
+    value["dnd"] = serde_json::Value::Bool(on);
+    let mut out = serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".into());
+    out.push('\n');
+    out
+}
+
+/// Persist do-not-disturb where Omarchy keeps it, so the setting is shared and
+/// survives restarts. Written atomically (temp file + rename).
+pub fn set_omarchy_dnd_file(on: bool) -> std::io::Result<()> {
+    let path = omarchy_state_path()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let raw = std::fs::read_to_string(&path).ok();
+    let tmp = path.with_extension("json.naarchy-tmp");
+    std::fs::write(&tmp, with_omarchy_dnd(raw.as_deref(), on))?;
+    std::fs::rename(&tmp, &path)
 }
 
 // ---------- gestures ----------
@@ -457,6 +489,7 @@ pub fn card(b: &Banner, shared: &Rc<Shared>, body_lines: i32) -> gtk4::Box {
 struct PeekWin {
     id: u32,
     generation: u64,
+    banner: Banner,
     ephemeral: bool,
     win: ApplicationWindow,
     timeout: Rc<Cell<Option<glib::SourceId>>>,
@@ -554,6 +587,7 @@ impl Peek {
         self.cur = Some(PeekWin {
             id: b.id,
             generation: b.generation,
+            banner: b.clone(),
             ephemeral: is_ephemeral(b),
             win,
             timeout,
@@ -584,6 +618,11 @@ impl Peek {
 
     pub fn hide(&mut self) {
         self.cur = None;
+    }
+
+    /// The notification on the peek card, if one is showing.
+    pub fn current(&self) -> Option<Banner> {
+        self.cur.as_ref().map(|c| c.banner.clone())
     }
 }
 
@@ -793,6 +832,29 @@ mod tests {
         assert_eq!(pick_client("garbage", "slack"), None);
         assert!(valid_desktop_id("org.mozilla.firefox"));
         assert!(!valid_desktop_id("x; rm -rf ~"));
+    }
+
+    #[test]
+    fn omarchy_dnd_file_round_trip() {
+        let on = with_omarchy_dnd(Some(r#"{"version":3,"dnd":false,"x":1}"#), true);
+        assert_eq!(parse_omarchy_dnd(&on), Some(true));
+        assert!(on.contains("\"x\": 1") && on.contains("\"version\": 3"));
+        let fresh = with_omarchy_dnd(None, true);
+        assert_eq!(parse_omarchy_dnd(&fresh), Some(true));
+        assert!(fresh.contains("\"version\": 3"));
+        assert_eq!(
+            parse_omarchy_dnd(&with_omarchy_dnd(Some("[1]"), false)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn newest_is_last_arrival() {
+        let mut inbox = Inbox::default();
+        assert!(inbox.newest().is_none());
+        inbox.arrive(&banner(1, 1));
+        inbox.arrive(&banner(2, 2));
+        assert_eq!(inbox.newest().map(|b| b.id), Some(2));
     }
 
     #[test]

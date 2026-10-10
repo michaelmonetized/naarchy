@@ -20,6 +20,7 @@ naarchy expand | collapse
 naarchy tab <name>
 naarchy hud <kind> [value|+N|-N] [--icon GLYPH] [--label TEXT]
 naarchy notify SUMMARY [BODY]
+naarchy notifications dismiss | clear | invoke | dnd [toggle|on|off]
 naarchy shelf add PATH…
 naarchy shelf list
 naarchy shelf clear | remove ID

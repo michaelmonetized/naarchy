@@ -243,7 +243,21 @@ pub enum Verb {
         summary: String,
         body: String,
     },
+    Notices(NoticeCmd),
     Quit,
+}
+
+/// `naarchy notifications …`: what the keybinds drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoticeCmd {
+    /// Dismiss the peeking card, else the newest notification.
+    Dismiss,
+    /// Dismiss everything.
+    Clear,
+    /// Left-click the newest notification (default action + focus).
+    Invoke,
+    /// Do-not-disturb: None toggles.
+    Dnd(Option<bool>),
 }
 
 #[cfg(test)]
