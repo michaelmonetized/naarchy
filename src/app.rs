@@ -656,6 +656,12 @@ fn handle_event(app: &Rc<App>, ev: Event) {
                 }
             }
         }
+        Event::Plugin(update) => {
+            app.shared.plugins.borrow_mut().apply(update);
+            for p in app.pills.borrow().iter() {
+                p.tick();
+            }
+        }
         Event::CalendarEnriched(enriched) => {
             if !app.shared.cfg.borrow().calendar.travel_times {
                 return;

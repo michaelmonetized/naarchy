@@ -116,6 +116,8 @@ pub struct Features {
     pub calendar: bool,
     pub timer: bool,
     pub notifications: bool,
+    /// Start plugin packages from ~/.config/naarchy/plugins (restart to apply).
+    pub plugins: bool,
 }
 
 impl Default for Features {
@@ -127,6 +129,7 @@ impl Default for Features {
             calendar: true,
             timer: true,
             notifications: false,
+            plugins: true,
         }
     }
 }
@@ -332,6 +335,7 @@ clipboard = true
 calendar = true
 timer = true
 notifications = false   # own org.freedesktop.Notifications (leave false to keep mako/dunst)
+plugins = true          # run installed packages from ~/.config/naarchy/plugins (see naarchy plugin list)
 
 [clipboard]
 max_entries = 80

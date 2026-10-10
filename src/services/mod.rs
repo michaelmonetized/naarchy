@@ -122,6 +122,8 @@ pub enum Event {
     CalendarLoaded(Vec<calendar::CalEvent>),
     /// Enriched with travel times (directions + leave label)
     CalendarEnriched(Vec<crate::services::calendar::CalEvent>),
+    /// A plugin added, changed, or cleared a live activity.
+    Plugin(crate::plugins::host::Update),
 }
 
 /// Fresh content observed on the Wayland clipboard.

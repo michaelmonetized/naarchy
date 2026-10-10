@@ -157,6 +157,8 @@ pub struct Shared {
     pub widgets: RefCell<WidgetStore>,
     /// Meetings for today (refreshed from ICS feeds), sorted by start.
     pub cal_events: RefCell<Vec<crate::services::calendar::CalEvent>>,
+    /// Live activities published by plugin packages.
+    pub plugins: RefCell<crate::plugins::Board>,
     /// Show a transient "Done" state in the pill after a timer finishes.
     pub timer_done_until: Cell<u64>,
     pub media_cmd:
@@ -188,6 +190,7 @@ impl Shared {
             timer: RefCell::new(None),
             widgets: RefCell::new(WidgetStore::load()),
             cal_events: RefCell::new(Vec::new()),
+            plugins: RefCell::new(crate::plugins::Board::default()),
             timer_done_until: Cell::new(0),
             media_cmd: RefCell::new(None),
             notif_cmd: RefCell::new(None),

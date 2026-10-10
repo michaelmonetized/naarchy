@@ -7,6 +7,7 @@ mod diagnostics;
 mod first_run;
 mod ipc;
 mod omarchy;
+mod plugins;
 mod seasonal;
 mod services;
 mod shelf_store;
@@ -29,6 +30,7 @@ struct Startup {
 }
 
 static STARTUP: std::sync::Mutex<Option<Startup>> = std::sync::Mutex::new(None);
+static PLUGIN_HOST: std::sync::Mutex<Option<plugins::host::Host>> = std::sync::Mutex::new(None);
 use std::sync::mpsc;
 
 /// Print `$XDG_DATA_HOME/naarchy/shelf.json` as a pretty JSON array.
@@ -69,6 +71,7 @@ fn main() {
         Some("install-binds") => cli::print_binds(),
         Some("--help") | Some("-h") | Some("help") => cli::print_help(),
         Some("shelf") if args.get(1).map(|s| s.as_str()) == Some("list") => print_shelf_list(),
+        Some("plugin") | Some("plugins") => plugins::cli::run(&args[1..]),
         Some(verb) => cli::forward_verb(verb, &args[1..]),
     }
 }
@@ -170,6 +173,20 @@ fn start_daemon() {
         });
     }
 
+    if cfg.features.plugins {
+        let packages = plugins::runnable(&plugins::plugins_dir());
+        if !packages.is_empty() {
+            let tx = std::sync::Mutex::new(event_tx.clone());
+            let sink: plugins::host::Sink = std::sync::Arc::new(move |update| {
+                if let Ok(tx) = tx.lock() {
+                    tx.send(Event::Plugin(update));
+                }
+            });
+            let host = plugins::host::Host::start(packages, plugins::host::data_root(), sink);
+            *PLUGIN_HOST.lock().unwrap() = Some(host);
+        }
+    }
+
     // Disabled clipboard history must never capture clipboard data.
     if cfg.features.clipboard {
         let tx = event_tx.clone();
@@ -224,6 +241,9 @@ fn start_daemon() {
         crate::app::dismiss_welcome();
         crate::app::stop_seasonal();
         crate::chime::alarm_stop();
+        if let Some(host) = PLUGIN_HOST.lock().ok().and_then(|mut h| h.take()) {
+            host.shutdown();
+        }
     });
     gtk_app.run_with_args(&["naarchy"]);
 }

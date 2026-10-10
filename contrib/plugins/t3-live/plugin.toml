@@ -1,0 +1,7 @@
+name = "t3-live"
+version = "0.1.0"
+description = "Active T3 Code agent runs as island live activities"
+api = 1
+exec = "bin/t3-live"
+slot = "live-activity"
+restart = "on-failure"

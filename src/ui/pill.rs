@@ -17,6 +17,8 @@ enum Mood {
     Timer,
     Media,
     Files,
+    /// A plugin live activity (see `crate::plugins`).
+    Plugin,
 }
 
 pub struct PillUi {
@@ -35,6 +37,8 @@ pub struct PillUi {
     files_icon: Label,
     files_count: Label,
     files_pile: gtk4::Box,
+    plugin_icon: Label,
+    plugin_text: Label,
     last_pile: RefCell<String>,
     flash: Rc<Cell<f64>>,
     flash_vel: Rc<Cell<f64>>,
@@ -123,6 +127,9 @@ impl PillUi {
         left_box.append(&media_icon);
         left_box.append(&files_icon);
         left_box.append(&files_pile);
+        let plugin_icon = label(&["na-bubble-text", "na-glyph"], "");
+        plugin_icon.set_visible(false);
+        left_box.append(&plugin_icon);
 
         // Center of the island. Idle: this IS the pill. Live: it hexpands so
         // leading/trailing activities sit on the ears, not on top of each other.
@@ -159,6 +166,14 @@ impl PillUi {
         right_box.append(&timer_count);
         right_box.append(&media_title);
         right_box.append(&files_count);
+        let plugin_text = label(&["na-bubble-text"], "");
+        plugin_text.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        plugin_text.set_single_line_mode(true);
+        plugin_text.set_width_chars(22);
+        plugin_text.set_max_width_chars(34);
+        plugin_text.set_xalign(1.0);
+        plugin_text.set_visible(false);
+        right_box.append(&plugin_text);
 
         // One continuous capsule: no spacing between the pieces, so the whole
         // strip (bubbles + notch) reads as a single contiguous black pill.
@@ -262,6 +277,8 @@ impl PillUi {
             files_icon,
             files_count,
             files_pile,
+            plugin_icon,
+            plugin_text,
             last_pile: RefCell::new(String::new()),
             flash,
             flash_vel: Rc::new(Cell::new(0.0)),
@@ -340,7 +357,8 @@ impl PillUi {
     }
 
     /// Decide which content pair is live. One pair at a time by priority:
-    /// timer done > running timer > files on the shelf > playing music.
+    /// timer done > running timer > urgent plugin activity (priority 50+) >
+    /// files on the shelf > playing music > other plugin activity.
     fn update_mood(&self, sh: &Rc<Shared>) -> Mood {
         let features = sh.cfg.borrow().features.clone();
         let timer = sh.timer.borrow();
@@ -351,18 +369,39 @@ impl PillUi {
         let timer_on = features.timer && timer.as_ref().is_some_and(|t| t.remaining_secs() > 0);
         let music_on = features.media && media.as_ref().is_some_and(|s| s.playing);
         let files_on = features.shelf && count > 0;
+        let headline = if features.plugins {
+            sh.plugins.borrow().headline(super::now_secs())
+        } else {
+            None
+        };
+        let plugin_urgent = headline.as_ref().is_some_and(|h| h.priority >= 50);
 
         let mood = if done_on {
             Mood::Done
         } else if timer_on {
             Mood::Timer
+        } else if plugin_urgent {
+            Mood::Plugin
         } else if files_on {
             Mood::Files
         } else if music_on {
             Mood::Media
+        } else if headline.is_some() {
+            Mood::Plugin
         } else {
             Mood::None
         };
+        if mood == Mood::Plugin {
+            if let Some(h) = headline.as_ref() {
+                self.plugin_icon.set_text(&h.icon);
+                let text = if h.more > 0 {
+                    format!("{} +{}", h.text, h.more)
+                } else {
+                    h.text.clone()
+                };
+                self.plugin_text.set_text(&text);
+            }
+        }
 
         if let Some(secs) = timer.as_ref().map(|t| t.remaining_secs()) {
             self.timer_count.set_text(&fmt_mmss(secs));
@@ -411,6 +450,8 @@ impl PillUi {
         self.files_icon.set_visible(mood == Mood::Files && !pile_on);
         self.files_pile.set_visible(pile_on);
         self.files_count.set_visible(mood == Mood::Files);
+        self.plugin_icon.set_visible(mood == Mood::Plugin);
+        self.plugin_text.set_visible(mood == Mood::Plugin);
 
         // Camera hole stays `base_w` in the center. Live content lives on
         // the ears so a physical notch does not eat the countdown.
@@ -485,7 +526,7 @@ impl PillUi {
         let ears = match mood {
             Mood::None => 0,
             Mood::Timer | Mood::Done => 280,
-            Mood::Media => 460,
+            Mood::Media | Mood::Plugin => 460,
             Mood::Files => 240,
         };
         match mood {

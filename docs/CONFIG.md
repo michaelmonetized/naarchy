@@ -50,6 +50,7 @@ clipboard = true          # clipboard capture and history page
 calendar = true           # Calendar page and feed refresh
 timer = true              # timer controls and live activity
 notifications = false     # own org.freedesktop.Notifications (leave false for mako)
+plugins = true            # start installed plugin packages (docs/PLUGINS.md)
 
 [clipboard]
 max_entries = 80
@@ -126,10 +127,12 @@ service. `naarchy notify` can still show a local banner with that setting off.
 ```
 ~/.config/naarchy/config.toml
 ~/.config/naarchy/widgets.json          # Home widget set
+~/.config/naarchy/plugins/<name>/       # installed plugin packages
 ~/.local/share/naarchy/shelf.json
 ~/.local/share/naarchy/clipboard.json
 ~/.local/share/naarchy/first-run.json   # once-only local-calendar welcome decision
 ~/.local/share/naarchy/blobs/
+~/.local/share/naarchy/plugins/<name>/  # each plugin's private data
 ~/.cache/naarchy/art/
 ~/.cache/naarchy/calendar/
 ~/.cache/naarchy/alarm-v2.wav
