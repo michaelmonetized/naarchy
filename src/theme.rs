@@ -653,6 +653,28 @@ button:focus-visible, entry:focus-within, row:focus-visible, flowboxchild:focus-
 }}
 .na-banner-action:hover {{ background-color: {accent}; color: #0d0e12; }}
 
+.na-notice {{
+  background-color: rgba(8,8,12,0.88);
+  color: #ffffff;
+  border-radius: 16px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  transition: background-color 140ms {ease}, border-color 140ms {ease};
+}}
+.na-notice:hover {{
+  background-color: rgba(28,28,36,0.94);
+  border-color: {accent};
+}}
+.na-notice.critical {{ border-color: #ff5566; }}
+.na-notice.peek {{ box-shadow: 0 12px 36px rgba(0,0,0,0.45); }}
+.na-notice .na-title {{ color: #ffffff; }}
+.na-notice .na-dim {{ color: rgba(255,255,255,0.66); }}
+.na-notice-badge {{
+  color: #ffffff;
+  margin-left: 10px;
+  opacity: 0.85;
+}}
+
 .na-scroll > scrollbar {{
   opacity: 0;
   transition: opacity 180ms {ease};

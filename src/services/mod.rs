@@ -116,6 +116,8 @@ pub enum Event {
         id: u32,
         generation: u64,
     },
+    /// Some client holds a freedesktop notification inhibition (Inhibit/UnInhibit).
+    NotificationsInhibited(bool),
     ConfigChanged(Box<crate::config::Config>),
     /// ICS feeds were refreshed; today's meetings lived in shared.cal_events.
     CalendarReload,
@@ -204,8 +206,17 @@ pub struct Banner {
     pub body: String,
     pub actions: Vec<(String, String)>,
     pub urgency: u8, // 0 low 1 normal 2 critical
-    /// None stays visible until dismissed; Some schedules expiration.
+    /// Requested display time. None = critical/persistent (the peek stays
+    /// until clicked); Some = how long the peek card stays before it collapses
+    /// into the island's bell. Neither closes the notification by itself.
     pub timeout_ms: Option<u64>,
+    /// freedesktop `desktop-entry` hint: the sender's .desktop id, used to
+    /// focus or launch the source app on click.
+    pub desktop_entry: String,
+    /// Omarchy's `omarchy-exec` hint: a command its own toasts run on click.
+    pub exec: String,
+    /// freedesktop `transient` hint: never kept in the notification list.
+    pub transient: bool,
 }
 
 /// Verbs sent from CLI/IPC into the running instance.

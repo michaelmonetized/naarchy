@@ -7,6 +7,7 @@ pub mod hud;
 pub mod liquid;
 pub mod media;
 pub mod motion;
+pub mod notices;
 pub mod panel;
 pub mod pill;
 pub mod preferences;
@@ -159,6 +160,8 @@ pub struct Shared {
     pub cal_events: RefCell<Vec<crate::services::calendar::CalEvent>>,
     /// Live activities published by plugin packages.
     pub plugins: RefCell<crate::plugins::Board>,
+    /// Notifications waiting on the bell, plus do-not-disturb state.
+    pub notices: RefCell<notices::Inbox>,
     /// Show a transient "Done" state in the pill after a timer finishes.
     pub timer_done_until: Cell<u64>,
     pub media_cmd:
@@ -191,6 +194,7 @@ impl Shared {
             widgets: RefCell::new(WidgetStore::load()),
             cal_events: RefCell::new(Vec::new()),
             plugins: RefCell::new(crate::plugins::Board::default()),
+            notices: RefCell::new(notices::Inbox::default()),
             timer_done_until: Cell::new(0),
             media_cmd: RefCell::new(None),
             notif_cmd: RefCell::new(None),

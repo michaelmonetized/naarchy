@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::services::{self, Banner, Event, Verb};
 use crate::ui::panel::PanelUi;
 use crate::ui::pill::PillUi;
-use crate::ui::{hud, Shared};
+use crate::ui::{hud, notices, Shared};
 use gtk4::glib;
 use gtk4::prelude::*;
 use std::cell::RefCell;
@@ -19,6 +19,7 @@ pub struct App {
     pills: RefCell<Vec<PillUi>>,
     panels: RefCell<Vec<PanelUi>>,
     huds: RefCell<hud::HudManager>,
+    peek: RefCell<notices::Peek>,
     welcome: RefCell<Option<Rc<crate::ui::welcome::Welcome>>>,
     halloween: RefCell<crate::seasonal::Halloween>,
     started: std::time::Instant,
@@ -253,11 +254,56 @@ pub fn refresh_clips() {
     });
 }
 
+/// A notification arrived (from notifd, `naarchy notify`, or the UI itself).
+fn notice_arrived(app: &Rc<App>, b: Banner) {
+    let (arrival, evicted) = app.shared.notices.borrow_mut().arrive(&b);
+    for (id, generation) in evicted {
+        notices::dismiss(&app.shared, id, generation, 1);
+    }
+    let ephemeral = notices::is_ephemeral(&b);
+    match arrival {
+        notices::Arrival::Peek => {
+            let wanted = ephemeral || app.shared.cfg.borrow().notifications.peek;
+            // While the island is open the list on Home already shows it.
+            if wanted && (ephemeral || !app.shared.expanded.get()) {
+                app.peek.borrow_mut().show(&b, &app.shared);
+            }
+        }
+        notices::Arrival::Silenced => {}
+        notices::Arrival::Dropped => {
+            if ephemeral && b.id != notices::INTERNAL_ID {
+                notices::dismiss(&app.shared, b.id, b.generation, 1);
+            }
+        }
+    }
+    refresh_notices(app);
+}
+
+/// Redraw the bell on every pill and the list on every panel.
+fn refresh_notices(app: &Rc<App>) {
+    for p in app.panels.borrow().iter() {
+        p.notices_reload(&app.shared);
+    }
+    for p in app.pills.borrow().iter() {
+        p.tick();
+    }
+}
+
+/// The peek card timed out: it collapses into the bell.
+pub fn peek_expired(id: u32, generation: u64) {
+    with_app(|app| {
+        let expired = app.peek.borrow_mut().expire(id, generation);
+        if let Some((id, generation)) = expired {
+            notices::dismiss(&app.shared, id, generation, 1);
+        }
+    });
+}
+
 pub fn notify_ui(summary: &str, body: &str) {
     with_app(|app| {
         if let Some(tx) = app.shared.ui_tx.borrow().as_ref() {
             tx.send(Event::Notify(Banner {
-                id: u32::MAX - 1,
+                id: notices::INTERNAL_ID,
                 generation: crate::services::next_banner_generation(),
                 app_name: "naarchy".into(),
                 icon: String::new(),
@@ -266,6 +312,9 @@ pub fn notify_ui(summary: &str, body: &str) {
                 actions: vec![],
                 urgency: 1,
                 timeout_ms: Some(6000),
+                desktop_entry: String::new(),
+                exec: String::new(),
+                transient: true,
             }));
         }
     });
@@ -330,6 +379,7 @@ pub fn run(
         pills: RefCell::new(Vec::new()),
         panels: RefCell::new(Vec::new()),
         huds: RefCell::new(hud::HudManager::new(app)),
+        peek: RefCell::new(notices::Peek::new(app)),
         welcome: RefCell::new(None),
         halloween: RefCell::new(crate::seasonal::Halloween::new(crate::util::now_unix())),
         started: std::time::Instant::now(),
@@ -376,6 +426,25 @@ pub fn run(
             glib::idle_add_local_once(|| {
                 with_app(|app| sync_surfaces(app, false));
             });
+        });
+    }
+
+    // Do-not-disturb follows Omarchy's shell (notifications.json `dnd`).
+    {
+        let a4 = a.clone();
+        let poll = move || {
+            let on = notices::omarchy_dnd();
+            if a4.shared.notices.borrow_mut().set_omarchy_dnd(on) {
+                if on {
+                    a4.peek.borrow_mut().hide();
+                }
+                refresh_notices(&a4);
+            }
+        };
+        poll();
+        glib::timeout_add_seconds_local(2, move || {
+            poll();
+            glib::ControlFlow::Continue
         });
     }
 
@@ -505,6 +574,10 @@ fn sync_surfaces(app: &Rc<App>, force: bool) {
             let panel = PanelUi::build(&app.gtk_app, &app.shared, Some(&monitor));
             *on_click.borrow_mut() = Some(Box::new(|| {
                 with_app(|app| {
+                    // The bell is on the island: expanding shows the list on Home.
+                    if !app.shared.expanded.get() && !app.shared.notices.borrow().is_empty() {
+                        app.shared.tab.set(crate::ui::Tab::Home);
+                    }
                     if app.shared.expanded.get() {
                         request_collapse_all();
                     } else {
@@ -613,9 +686,19 @@ fn handle_event(app: &Rc<App>, ev: Event) {
                 refresh_clips();
             }
         }
-        Event::CloseBanner { id, generation } => app.huds.borrow_mut().close_banner(id, generation),
-        Event::Notify(b) => {
-            app.huds.borrow_mut().show_banner(b, &app.shared);
+        Event::CloseBanner { id, generation } => {
+            app.shared.notices.borrow_mut().remove(id, generation);
+            app.peek.borrow_mut().hide_if(id, generation);
+            refresh_notices(app);
+        }
+        Event::Notify(b) => notice_arrived(app, b),
+        Event::NotificationsInhibited(on) => {
+            if app.shared.notices.borrow_mut().set_inhibited(on) {
+                if on {
+                    app.peek.borrow_mut().hide();
+                }
+                refresh_notices(app);
+            }
         }
         Event::ConfigChanged(cfg) => {
             if !cfg.behavior.hide_fullscreen {
@@ -775,9 +858,10 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
             dismiss_timer();
         }
         Verb::Notify { summary, body } => {
-            app.huds.borrow_mut().show_banner(
+            notice_arrived(
+                app,
                 Banner {
-                    id: u32::MAX - 1,
+                    id: notices::INTERNAL_ID,
                     generation: crate::services::next_banner_generation(),
                     app_name: "naarchy".into(),
                     icon: String::new(),
@@ -786,8 +870,10 @@ fn handle_verb(app: &Rc<App>, v: Verb) {
                     actions: vec![],
                     urgency: 1,
                     timeout_ms: Some(6000),
+                    desktop_entry: String::new(),
+                    exec: String::new(),
+                    transient: true,
                 },
-                &app.shared,
             );
         }
         Verb::Quit => {

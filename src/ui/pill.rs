@@ -19,6 +19,8 @@ enum Mood {
     Files,
     /// A plugin live activity (see `crate::plugins`).
     Plugin,
+    /// Notifications waiting: bell + count (see `super::notices`).
+    Notices,
 }
 
 pub struct PillUi {
@@ -39,6 +41,12 @@ pub struct PillUi {
     files_pile: gtk4::Box,
     plugin_icon: Label,
     plugin_text: Label,
+    notice_icon: Label,
+    notice_count: Label,
+    /// Small bell + count riding along while another activity owns the ears.
+    notice_badge: gtk4::Box,
+    notice_badge_icon: Label,
+    notice_badge_count: Label,
     last_pile: RefCell<String>,
     flash: Rc<Cell<f64>>,
     flash_vel: Rc<Cell<f64>>,
@@ -130,6 +138,9 @@ impl PillUi {
         let plugin_icon = label(&["na-bubble-text", "na-glyph"], "");
         plugin_icon.set_visible(false);
         left_box.append(&plugin_icon);
+        let notice_icon = label(&["na-bubble-text", "na-glyph"], super::notices::BELL);
+        notice_icon.set_visible(false);
+        left_box.append(&notice_icon);
 
         // Center of the island. Idle: this IS the pill. Live: it hexpands so
         // leading/trailing activities sit on the ears, not on top of each other.
@@ -174,6 +185,18 @@ impl PillUi {
         plugin_text.set_xalign(1.0);
         plugin_text.set_visible(false);
         right_box.append(&plugin_text);
+        let notice_count = label(&["na-bubble-text", "na-pill-count"], "0");
+        notice_count.set_visible(false);
+        right_box.append(&notice_count);
+        let notice_badge = hbox(4);
+        notice_badge.add_css_class("na-notice-badge");
+        notice_badge.set_valign(gtk4::Align::Center);
+        let notice_badge_icon = label(&["na-glyph"], super::notices::BELL);
+        let notice_badge_count = label(&["na-pill-count"], "0");
+        notice_badge.append(&notice_badge_icon);
+        notice_badge.append(&notice_badge_count);
+        notice_badge.set_visible(false);
+        right_box.append(&notice_badge);
 
         // One continuous capsule: no spacing between the pieces, so the whole
         // strip (bubbles + notch) reads as a single contiguous black pill.
@@ -279,6 +302,11 @@ impl PillUi {
             files_pile,
             plugin_icon,
             plugin_text,
+            notice_icon,
+            notice_count,
+            notice_badge,
+            notice_badge_icon,
+            notice_badge_count,
             last_pile: RefCell::new(String::new()),
             flash,
             flash_vel: Rc::new(Cell::new(0.0)),
@@ -375,6 +403,10 @@ impl PillUi {
             None
         };
         let plugin_urgent = headline.as_ref().is_some_and(|h| h.priority >= 50);
+        let (notice_n, dnd) = {
+            let inbox = sh.notices.borrow();
+            (inbox.len(), inbox.dnd())
+        };
 
         let mood = if done_on {
             Mood::Done
@@ -388,9 +420,29 @@ impl PillUi {
             Mood::Media
         } else if headline.is_some() {
             Mood::Plugin
+        } else if notice_n > 0 {
+            Mood::Notices
         } else {
             Mood::None
         };
+        let bell = if dnd {
+            super::notices::BELL_OFF
+        } else {
+            super::notices::BELL
+        };
+        let notice_label = if notice_n > 99 {
+            "99+".to_string()
+        } else {
+            notice_n.to_string()
+        };
+        super::set_label_text(&self.notice_icon, bell);
+        super::set_label_text(&self.notice_count, &notice_label);
+        super::set_label_text(&self.notice_badge_icon, bell);
+        super::set_label_text(&self.notice_badge_count, &notice_label);
+        self.notice_icon.set_visible(mood == Mood::Notices);
+        self.notice_count.set_visible(mood == Mood::Notices);
+        self.notice_badge
+            .set_visible(notice_n > 0 && !matches!(mood, Mood::Notices | Mood::None));
         if mood == Mood::Plugin {
             if let Some(h) = headline.as_ref() {
                 self.plugin_icon.set_text(&h.icon);
@@ -527,7 +579,12 @@ impl PillUi {
             Mood::None => 0,
             Mood::Timer | Mood::Done => 280,
             Mood::Media | Mood::Plugin => 460,
-            Mood::Files => 240,
+            Mood::Files | Mood::Notices => 240,
+        };
+        let ears = if self.notice_badge.is_visible() {
+            ears + 70
+        } else {
+            ears
         };
         match mood {
             Mood::None => self.base_w,

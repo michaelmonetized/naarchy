@@ -85,7 +85,7 @@ invalid or overflowing values exit 2.
 
 ## Notify
 
-Paints a banner in the HUD. Does **not** require `features.notifications`.
+Shows a peek card under the notch (not kept in the notification list). Does **not** require `features.notifications`.
 Does not talk to mako.
 
 ## Single instance
